@@ -1,4 +1,6 @@
 import json
+
+import numpy as np
 import torch
 import pandas as pd
 from pathlib import Path
@@ -47,6 +49,26 @@ class MetricTracker:
     def __init__(self, *keys, writer=None):
         self.writer = writer
         self._data = pd.DataFrame(index=keys, columns=['total', 'counts', 'average'])
+
+        self.train_losses = []
+        self.train_bce_losses = []
+        self.train_target_losses = []
+        self.val_losses = []
+        self.val_bce_losses = []
+        self.val_target_losses = []
+        self.train_accuracies = []
+        self.val_accuracies = []
+        self.train_total_bce_losses = []
+        self.val_total_bce_losses = []
+        self.APLs_train = []
+        self.APL_predictions_train = []
+        self.APL_predictions_test = []
+        self.APLs_test = []
+        self.fidelities_train = []
+        self.fidelities_test = []
+        self.FI_train = []
+        self.FI_test = []
+
         self.reset()
 
     def reset(self):
@@ -65,3 +87,66 @@ class MetricTracker:
 
     def result(self):
         return dict(self._data.average)
+
+
+class SimplerMetricTracker:
+
+    def __init__(self, epochs, keys, writer=None, mode='train'):
+        self._data = pd.DataFrame(index=[i for i in range(epochs)], columns=keys)
+        self.writer = writer
+        self.keys = keys
+        self.mode = mode
+
+        self.reset()
+
+    def reset(self):
+        self.batch_results = {key: [] for key in self.keys}
+
+    def append_batch_result(self, key, value):
+        self.batch_results[key].append(value)
+
+    def append_epoch_result(self, epoch, key, value):
+        # manually append a result to the epoch
+        if key not in self._data.columns:
+            self._data[key] = ''
+        self._data.at[epoch, key] = value
+        if self.writer is not None:
+            if isinstance(value, list) == False:
+                tb_key = self.mode + '_' + key
+                self.writer.add_scalar(tb_key, value, epoch)
+
+    def update_epoch(self, epoch):
+        for key in self.keys:
+            values = self.batch_results[key]
+            total_value = sum(values)
+            count = len(values)
+            if key not in ['correct', 'total']:
+                f_value = total_value / count if count > 0 else 0
+                if self.writer is not None:
+                    tb_key = self.mode + '_' + key
+                    self.writer.add_scalar(tb_key, f_value, epoch)
+            else:
+                f_value = total_value
+            self._data.loc[epoch, key] = f_value
+
+        # fix for accuracy
+        if (self._data.loc[epoch, 'correct'] is not None
+                and self._data.loc[epoch, 'total'] is not None):
+            self._data.loc[epoch, 'accuracy'] = (
+                    self._data.loc[epoch, 'correct'] / self._data.loc[epoch, 'total'])
+            tb_key = self.mode + '_' + "accuracy"
+            self.writer.add_scalar(key, self._data.loc[epoch, 'accuracy'], epoch)
+        else:
+            raise ValueError('Both correct and total must be present in the epoch results.')
+
+        # reset batch results for next epoch
+        self.reset()
+
+    def result(self, epoch):
+        return dict(self._data.loc[epoch, :])
+
+    def get_value(self, epoch, key):
+        return self._data.loc[epoch, key]
+
+    def all_results(self):
+        return self._data

@@ -1,0 +1,54 @@
+{
+    "name": "cbm-mnist_10d_24c_joint_cbm_tree",
+    "n_gpu": 1,
+
+    "model": {
+        "type": "NN",
+        "training_mode": "Joint",
+        "alpha": 1,
+        "epochs": 100,
+        "encoder_arch": "LeNet",
+        "t_hidden_dim": 100
+    },
+    "dataset": {
+        "type": "Parabola",
+        "num_classes": 2,
+        "num_features": 2,
+        "feature_names": ["x", "y"],
+        "class_names": ["class_0", "class_1"],
+    },
+    "data_loader": {
+        "type": "MnistDataLoader",
+        "args":{
+            "data_dir": "data/",
+            "batch_size": 128,
+            "shuffle": true,
+            "validation_split": 0.1,
+            "num_workers": 2
+        }
+    },
+    "optimizer": {
+        "type": "Adam",
+        "args":{
+            "lr": 0.001,
+            "weight_decay": 0,
+            "amsgrad": true
+        }
+    },
+    "trainer": {
+        "save_dir": "saved/",
+        "save_period": 1,
+        "verbosity": 2,
+        "monitor": "min val_loss",
+        "early_stop": 10,
+        "tensorboard": true
+    },
+    "regularisation": {
+        "type": "Tree",
+        "tree_reg_mode": "Joint",
+        "reg_strength": 0.1,
+        "mse_loss_strength": 0.1,
+        "min_samples_leaf": 10,
+
+    }
+}

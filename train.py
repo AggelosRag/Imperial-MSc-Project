@@ -2,17 +2,18 @@ import argparse
 import collections
 import torch
 import numpy as np
-import data_loader.data_loaders as module_data
 import model.loss as module_loss
 import model.metric as module_metric
 import model.model as module_arch
+from experimentation.tree_final import perform_leakage_visualization
 from parse_config import ConfigParser
 from trainer import Trainer
 from utils import prepare_device
+import importlib
 
 
 # fix random seeds for reproducibility
-SEED = 123
+SEED = 42
 torch.manual_seed(SEED)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
@@ -22,40 +23,56 @@ def main(config):
     logger = config.get_logger('train')
 
     # setup data_loader instances
-    data_loader = config.init_obj('data_loader', module_data)
-    valid_data_loader = data_loader.split_validation()
+    dataloaders_module = importlib.import_module("data_loaders")
+    data_loader, valid_data_loader = config.init_obj('data_loader', dataloaders_module)
+    #valid_data_loader = data_loader.split_validation()
 
     # build model architecture, then print to console
-    model = config.init_obj('arch', module_arch)
-    logger.info(model)
+    arch_module = importlib.import_module("architectures")
+    arch = config.init_obj('arch', arch_module, config)
+    logger.info(arch.model)
 
     # prepare for (multi-device) GPU training
     device, device_ids = prepare_device(config['n_gpu'])
-    model = model.to(device)
+    model = arch.model.to(device)
     if len(device_ids) > 1:
         model = torch.nn.DataParallel(model, device_ids=device_ids)
 
+    if 'explainer' in config.config.keys():
+        perform_leakage_visualization(data_loader, arch, config)
+        return 0
     # get function handles of loss and metrics
-    criterion = getattr(module_loss, config['loss'])
-    metrics = [getattr(module_metric, met) for met in config['metrics']]
+    # criterion = getattr(module_loss, config['loss'])
+    # metrics = [getattr(module_metric, met) for met in config['metrics']]
+    metrics = config['metrics']
+    reg = config['regularisation']["type"]
 
     # build optimizer, learning rate scheduler. delete every lines containing lr_scheduler for disabling scheduler
-    trainable_params = filter(lambda p: p.requires_grad, model.parameters())
-    optimizer = config.init_obj('optimizer', torch.optim, trainable_params)
-    lr_scheduler = config.init_obj('lr_scheduler', torch.optim.lr_scheduler, optimizer)
+    # trainable_params = filter(lambda p: p.requires_grad, model.parameters())
+    # optimizer = config.init_obj('optimizer', torch.optim, trainable_params)
+    # lr_scheduler = config.init_obj('lr_scheduler', torch.optim.lr_scheduler, optimizer)
 
-    trainer = Trainer(model, criterion, metrics, optimizer,
-                      config=config,
-                      device=device,
-                      data_loader=data_loader,
-                      valid_data_loader=valid_data_loader,
-                      lr_scheduler=lr_scheduler)
+    trainers = importlib.import_module("trainers")
+    trainer = config.init_obj('trainer', trainers,
+                              arch=arch,
+                              metric_ftns=metrics,
+                              config=config,
+                              device=device,
+                              data_loader=data_loader,
+                              valid_data_loader=valid_data_loader,
+                              reg=reg)
+    # trainer = Trainer(arch=arch, metric_ftns=metrics,
+    #                   config=config,
+    #                   device=device,
+    #                   data_loader=data_loader,
+    #                   valid_data_loader=valid_data_loader,
+    #                   reg=reg)
 
     trainer.train()
 
 
 if __name__ == '__main__':
-    args = argparse.ArgumentParser(description='PyTorch Template')
+    args = argparse.ArgumentParser(description='Imperial Diploma Project')
     args.add_argument('-c', '--config', default=None, type=str,
                       help='config file path (default: None)')
     args.add_argument('-r', '--resume', default=None, type=str,

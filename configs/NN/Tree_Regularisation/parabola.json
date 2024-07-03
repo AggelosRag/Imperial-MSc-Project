@@ -1,0 +1,51 @@
+{
+    "name": "parabola_tree",
+    "n_gpu": 1,
+
+    "arch": {
+        "type": "ParabolaArchitecture",
+        "args": {}
+    },
+    "model": {
+        "lr": 0.001,
+        "weight_decay": 0
+    },
+    "dataset": {
+        "type": "Parabola",
+        "num_classes": 2,
+        "num_features": 2,
+        "train_size": 200,
+        "feature_names": ["x", "y"],
+        "class_names": ["0", "1"],
+        "contour_plot": 1
+    },
+    "data_loader": {
+        "type": "get_parabola_dataLoader",
+        "args":{
+            "data_dir": "./datasets/parabola",
+            "type": "Full-GD"
+        }
+    },
+    "metrics": ["target_loss", "correct", "total", "APL_predictions",
+                "APL", "total_loss"],
+    "trainer": {
+        "type": "NNTrainer",
+        "args": {},
+        "epochs": 100,
+        "save_dir": "saved/",
+        "save_period": 1,
+        "verbosity": 2,
+        "monitor": "off",
+        "early_stop": 10,
+        "tensorboard": true
+    },
+    "regularisation": {
+        "type": "Tree",
+        "tree_reg_mode": "Joint",
+        "reg_strength": 0.1,
+        "mse_loss_strength": 0.1,
+        "min_samples_leaf": 1,
+        "warm_up_epochs": 30,
+        "snapshot_epochs": 30
+    }
+}

@@ -4,6 +4,9 @@ import torch
 import numpy as np
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
 
+from model.loss import SelectiveNetLoss, CELoss
+
+
 class MNISTCBMTreeArchitecture:
     def __init__(self, config):
 
@@ -18,7 +21,7 @@ class MNISTCBMTreeArchitecture:
 
         # Define loss functions and optimizers
         self.criterion_concept = nn.BCELoss(reduction='none')  # BCE Loss for binary concepts
-        self.criterion_label = nn.CrossEntropyLoss()
+        self.criterion_label = CELoss()
         self.criterion_sr = nn.MSELoss()
 
         self.optimizer = torch.optim.Adam(self.model.parameters(),
@@ -37,7 +40,7 @@ class MNISTCBMArchitecture:
 
         # Define loss functions and optimizers
         self.criterion_concept = nn.BCELoss(reduction='none')  # BCE Loss for binary concepts
-        self.criterion_label = nn.CrossEntropyLoss()
+        self.criterion_label = CELoss()
 
         # only apply regularisation (if any) to the label predictor,
         # for a fair comparison with Tree Regularisation
@@ -71,13 +74,22 @@ class MNISTCBMSelectiveNetArchitecture:
 
         # Define loss functions and optimizers
         self.criterion_concept = nn.BCELoss(reduction='none')  # BCE Loss for binary concepts
-        self.criterion_label = nn.CrossEntropyLoss()
+        CE = nn.CrossEntropyLoss(reduction='none')
+        self.criterion_label = SelectiveNetLoss(
+            iteration=1, CE=CE,
+            selection_threshold=config["selectivenet"]["selection_threshold"],
+            coverage=config["selectivenet"]["coverage"],
+            lm=config["selectivenet"]["lm"], dataset=config["dataset"],
+            alpha=config["selectivenet"]["alpha"]
+        )
 
         # only apply regularisation (if any) to the label predictor,
         # for a fair comparison with Tree Regularisation
         params_to_update = [
             {'params': self.model.concept_predictor.parameters(), 'weight_decay': 0},
             {'params': self.model.label_predictor.parameters(), 'weight_decay': config["model"]['weight_decay']},
+            {'params': self.selector.parameters(), 'weight_decay': config["model"]['weight_decay']},
+            {'params': self.aux_model.parameters(), 'weight_decay': config["model"]['weight_decay']},
         ]
 
         self.optimizer = torch.optim.Adam(params_to_update,

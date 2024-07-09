@@ -7,7 +7,6 @@ import model.metric as module_metric
 import model.model as module_arch
 from experimentation.tree_final import perform_leakage_visualization
 from parse_config import ConfigParser
-from trainer import Trainer
 from utils import prepare_device
 import importlib
 
@@ -44,7 +43,7 @@ def main(config):
     # get function handles of loss and metrics
     # criterion = getattr(module_loss, config['loss'])
     # metrics = [getattr(module_metric, met) for met in config['metrics']]
-    metrics = config['metrics']
+    #metrics = config['metrics']
     reg = config['regularisation']["type"]
 
     # build optimizer, learning rate scheduler. delete every lines containing lr_scheduler for disabling scheduler
@@ -55,7 +54,6 @@ def main(config):
     trainers = importlib.import_module("trainers")
     trainer = config.init_obj('trainer', trainers,
                               arch=arch,
-                              metric_ftns=metrics,
                               config=config,
                               device=device,
                               data_loader=data_loader,

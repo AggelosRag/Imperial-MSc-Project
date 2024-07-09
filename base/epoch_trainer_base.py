@@ -19,8 +19,7 @@ class EpochTrainerBase:
     def _valid_epoch(self, epoch):
         raise NotImplementedError
 
-    def _calculate_APL(self, model, min_samples_leaf1, C_pred, outputs,
-                       metrics, epoch, mode):
+    def _calculate_APL(self, min_samples_leaf1, C_pred, outputs):
 
         min_samples_leaf = min_samples_leaf1
         tree = DecisionTreeClassifier(min_samples_leaf=min_samples_leaf)
@@ -43,7 +42,6 @@ class EpochTrainerBase:
         # tree_train = reduced_error_prune(tree_train, C_pred, y_train)
         y_pred = tree.predict(C_pred)
         fid = accuracy_score(preds, y_pred)
-        metrics.append_epoch_result(epoch, 'fidelity', fid)
         #print(f'Fidelity {mode}: {fid}')
 
         # path_length = 0
@@ -63,12 +61,10 @@ class EpochTrainerBase:
 
         APL = tree.tree_.node_count
         # APL = path_length / len(C_pred)
-        metrics.append_epoch_result(epoch, 'APL', APL)
-        metrics.append_epoch_result(epoch, 'Feauture Importances', list(tree.feature_importances_))
 
-        return APL, metrics, tree
+        return APL, fid, list(tree.feature_importances_), tree
 
-    def _visualize_tree(self, tree, config, epoch, valid_metrics, train_metrics):
+    def _visualize_tree(self, tree, config, epoch, APL, train_acc, val_acc):
 
         # export tree
         plt.figure(figsize=(20, 20))
@@ -83,9 +79,6 @@ class EpochTrainerBase:
             feature_names=config['dataset']['feature_names'],
             class_names=config['dataset']['class_names'],
         )
-        total_nodes = train_metrics.get_value(epoch, 'APL')
-        test_acc = valid_metrics.get_value(epoch, 'accuracy')
-        train_acc = train_metrics.get_value(epoch, 'accuracy')
 
         graph = pydotplus.graph_from_dot_data(dot_data.getvalue())
 
@@ -93,7 +86,9 @@ class EpochTrainerBase:
         if not os.path.exists(fig_path):
             os.makedirs(fig_path)
 
+        # graph.write_png(fig_path + f'/tree_{epoch}_nodes_'
+        #                 f'{APL}_train_acc_{train_acc:.4f}_'
+        #                 f'test_acc_{val_acc:.4f}.png')
         graph.write_png(fig_path + f'/tree_{epoch}_nodes_'
-                        f'{total_nodes}_train_acc_{train_acc:.4f}_'
-                        f'test_acc_{test_acc:.4f}.png')
+                        f'{APL}.png')
         Image(graph.create_png())

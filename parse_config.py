@@ -38,7 +38,7 @@ class ConfigParser:
         self.log_dir.mkdir(parents=True, exist_ok=exist_ok)
 
         # save updated config file to the checkpoint dir
-        write_json(self.config, self.save_dir / 'config.json')
+        write_json(self.config, self.log_dir / 'config.json')
 
         # configure logging module
         setup_logging(self.log_dir)

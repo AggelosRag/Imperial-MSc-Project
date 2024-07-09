@@ -1,78 +1,74 @@
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 
 class TwoBatchDataLoader(DataLoader):
-    def __init__(self, dataset, ratio=0.5, shuffle=True):
-        self.ratio = ratio
-        self.shuffle = shuffle
+    def __init__(self, dataset, batch_size, shuffle=True):
         self.dataset = dataset
+        self.batch_size = batch_size
+        self.shuffle = shuffle
         self.num_samples = len(dataset)
-        super(TwoBatchDataLoader, self).__init__(dataset,
-                                                 batch_size=self.num_samples,
-                                                 shuffle=self.shuffle)
+        self.data_indices = np.arange(self.num_samples)
+        super(TwoBatchDataLoader, self).__init__(dataset, batch_size=batch_size, shuffle=shuffle)
 
     def __iter__(self):
-        data_indices = np.arange(self.num_samples)
         if self.shuffle:
-            np.random.shuffle(data_indices)
+            np.random.shuffle(self.data_indices)
 
-        split_point = int(self.num_samples * self.ratio)
-        first_batch_indices = data_indices[:split_point]
-        second_batch_indices = data_indices[split_point:]
+        self.batches = [self.data_indices[i:i + self.batch_size] for i in range(0, self.num_samples, self.batch_size)]
+        return self._iter_batches()
 
-        first_batch = [self.dataset[i] for i in first_batch_indices]
-        second_batch = [self.dataset[i] for i in second_batch_indices]
+    def _iter_batches(self):
+        for batch_indices in self.batches:
+            batch_set = Subset(self.dataset, batch_indices)
+            rest_indices = np.setdiff1d(self.data_indices, batch_indices)
+            rest_set = Subset(self.dataset, rest_indices)
 
-        first_batch_data = torch.stack([item[0] for item in first_batch])
-        first_batch_labels = torch.stack([item[1] for item in first_batch])
-        # check if the second batch is not an empty list
-        if second_batch:
-            second_batch_data = torch.stack([item[0] for item in second_batch])
-            second_batch_labels = torch.stack([item[1] for item in second_batch])
-        else:
-            second_batch_data = None
-            second_batch_labels = None
+            batch_loader = DataLoader(batch_set, batch_size=len(batch_set), shuffle=False)
+            if len(rest_set) == 0:
+                rest_loader = None
+                rest_data = None
+                rest_labels = None
+            else:
+                rest_loader = DataLoader(rest_set, batch_size=len(rest_set), shuffle=False)
+                rest_data, rest_labels = next(iter(rest_loader))
 
-        yield ((first_batch_data, first_batch_labels),
-               (second_batch_data, second_batch_labels))
+            batch_data, batch_labels = next(iter(batch_loader))
+            yield (batch_data, batch_labels), (rest_data, rest_labels)
 
 
 class TwoBatchTripletDataLoader(DataLoader):
-    def __init__(self, dataset, ratio=0.5, shuffle=True):
-        self.ratio = ratio
-        self.shuffle = shuffle
+    def __init__(self, dataset, batch_size, shuffle=True):
         self.dataset = dataset
+        self.batch_size = batch_size
+        self.shuffle = shuffle
         self.num_samples = len(dataset)
-        super(TwoBatchTripletDataLoader, self).__init__(dataset,
-                                                 batch_size=self.num_samples,
-                                                 shuffle=self.shuffle)
+        super(TwoBatchTripletDataLoader, self).__init__(dataset, batch_size=batch_size, shuffle=shuffle)
 
     def __iter__(self):
         data_indices = np.arange(self.num_samples)
         if self.shuffle:
             np.random.shuffle(data_indices)
 
-        split_point = int(self.num_samples * self.ratio)
-        first_batch_indices = data_indices[:split_point]
-        second_batch_indices = data_indices[split_point:]
+        self.batches = [data_indices[i:i + self.batch_size] for i in range(0, self.num_samples, self.batch_size)]
+        return self._iter_batches(data_indices)
 
-        first_batch = [self.dataset[i] for i in first_batch_indices]
-        second_batch = [self.dataset[i] for i in second_batch_indices]
+    def _iter_batches(self, data_indices):
+        for batch_indices in self.batches:
+            batch_set = Subset(self.dataset, batch_indices)
+            rest_indices = np.setdiff1d(data_indices, batch_indices)
+            rest_set = Subset(self.dataset, rest_indices)
 
-        first_batch_data = torch.stack([item[0] for item in first_batch])
-        first_batch_concepts = torch.stack([item[1] for item in first_batch])
-        first_batch_labels = torch.stack([item[2] for item in first_batch])
-        # check if the second batch is not an empty list
-        if second_batch:
-            second_batch_data = torch.stack([item[0] for item in second_batch])
-            second_batch_concepts = torch.stack([item[1] for item in second_batch])
-            second_batch_labels = torch.stack([item[2] for item in second_batch])
-        else:
-            second_batch_data = None
-            second_batch_concepts = None
-            second_batch_labels = None
+            batch_loader = DataLoader(batch_set, batch_size=len(batch_set), shuffle=False)
+            if len(rest_set) == 0:
+                rest_loader = None
+                rest_data = None
+                rest_concepts = None
+                rest_labels = None
+            else:
+                rest_loader = DataLoader(rest_set, batch_size=len(rest_set), shuffle=False)
+                rest_data, rest_concepts, rest_labels = next(iter(rest_loader))
 
-        yield ((first_batch_data, first_batch_concepts, first_batch_labels),
-               (second_batch_data, second_batch_concepts, second_batch_labels))
+            batch_data, batch_concepts, batch_labels = next(iter(batch_loader))
+            yield (batch_data, batch_concepts, batch_labels), (rest_data, rest_concepts, rest_labels)

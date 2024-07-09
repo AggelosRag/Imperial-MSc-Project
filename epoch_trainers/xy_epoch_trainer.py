@@ -90,8 +90,8 @@ class XY_Epoch_Trainer(EpochTrainerBase):
 
         # Calculate the APL
         self.model.eval()
-        APL, self.train_metrics, tree = self._calculate_APL(self.model, self.min_samples_leaf, X_batch, y_pred,
-                                                            self.train_metrics, epoch, mode='Training')
+        APL, self.train_metrics, tree = self._calculate_APL(
+            self.min_samples_leaf, X_batch, y_pred)
         self.model.train()
 
         loss = loss_label
@@ -112,9 +112,8 @@ class XY_Epoch_Trainer(EpochTrainerBase):
 
         #visualize tree
         if epoch % self.config['regularisation']['snapshot_epochs'] == 0:
-            self._visualize_tree(tree, self.config, epoch,
-                                 self.valid_metrics,
-                                 self.train_metrics)
+            self._visualize_tree(tree, self.config, epoch, APL, train_acc,
+                                 val_acc)
 
         return log
 
@@ -154,9 +153,8 @@ class XY_Epoch_Trainer(EpochTrainerBase):
         # Update the epoch metrics
         self.valid_metrics.update_epoch(epoch)
 
-        APL_test, self.valid_metrics, tree = self._calculate_APL(self.model, self.min_samples_leaf, X_batch,
-                                                          y_pred, self.valid_metrics, epoch,
-                                                          mode='Validation')
+        APL_test, self.valid_metrics, tree = self._calculate_APL(
+            self.min_samples_leaf, X_batch, y_pred)
 
         loss = loss_label
 

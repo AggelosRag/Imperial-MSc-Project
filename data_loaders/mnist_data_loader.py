@@ -8,9 +8,9 @@ from torchvision import datasets, transforms
 from base import BaseDataLoader, TwoBatchTripletDataLoader, TwoBatchDataLoader
 
 
-def get_mnist_dataLoader(ratio=0.2,
-                        data_dir='./datasets/parabola',
-                        type='Full-GD'):
+def get_mnist_dataLoader(data_dir='./datasets/parabola',
+                        type='Full-GD',
+                        batch_size=None):
 
     # Download training and test sets
     transform = transforms.Compose([
@@ -150,13 +150,13 @@ def get_mnist_dataLoader(ratio=0.2,
                                                                       test_size=0.5,
                                                                       random_state=42)
     # Convert to PyTorch tensors
-    X_train = torch.tensor(X_train, dtype=torch.float32)
-    C_train = torch.tensor(C_train, dtype=torch.float32)
-    y_train = torch.tensor(y_train, dtype=torch.long)
+    X_train = torch.tensor(X_train[:8858], dtype=torch.float32)
+    C_train = torch.tensor(C_train[:8858], dtype=torch.float32)
+    y_train = torch.tensor(y_train[:8858], dtype=torch.long)
 
-    X_val = torch.tensor(X_val, dtype=torch.float32)
-    C_val = torch.tensor(C_val, dtype=torch.float32)
-    y_val = torch.tensor(y_val, dtype=torch.long)
+    X_val = torch.tensor(X_val[:8858], dtype=torch.float32)
+    C_val = torch.tensor(C_val[:8858], dtype=torch.float32)
+    y_val = torch.tensor(y_val[:8858], dtype=torch.long)
 
     # Create DataLoader
     train_dataset = TensorDataset(X_train, C_train, y_train)
@@ -164,25 +164,35 @@ def get_mnist_dataLoader(ratio=0.2,
 
     if type == 'Full-GD':
         data_train_loader = TwoBatchTripletDataLoader(dataset=train_dataset,
-                                                      ratio=1.0,
+                                                      batch_size=X_train.shape[0],
                                                       shuffle=True)
+        data_test_loader = TwoBatchTripletDataLoader(dataset=val_dataset,
+                                                     batch_size=X_val.shape[0],
+                                                     shuffle=False)
     elif type == 'Two-Batch':
         data_train_loader = TwoBatchTripletDataLoader(dataset=train_dataset,
-                                                      ratio=ratio,
+                                                      batch_size=batch_size,
                                                       shuffle=True)
+        data_test_loader = TwoBatchTripletDataLoader(dataset=val_dataset,
+                                                     batch_size=batch_size,
+                                                     shuffle=False)
+    elif type == 'SGD':
+        data_train_loader = DataLoader(dataset=train_dataset,
+                                      batch_size=batch_size,
+                                      shuffle=True)
+        data_test_loader = DataLoader(dataset=val_dataset,
+                                      batch_size=batch_size,
+                                      shuffle=False)
     else:
         NotImplementedError('ERROR: data type not supported!')
-
-    data_test_loader = DataLoader(dataset=val_dataset,
-                                  batch_size=X_val.shape[0],
-                                  shuffle=False)
 
     return data_train_loader, data_test_loader
 
 
 def get_mnist_cy_dataLoader(ratio=0.2,
                            data_dir='./datasets/parabola',
-                           type='Full-GD'):
+                           type='Full-GD',
+                           batch_size=None):
 
     # import pickle files
     with open('./datasets/MNIST/mine_preprocessed/area_dict.pkl', 'rb') as f:
@@ -312,11 +322,20 @@ def get_mnist_cy_dataLoader(ratio=0.2,
         data_train_loader = TwoBatchDataLoader(dataset=train_dataset,
                                                ratio=ratio,
                                                shuffle=True)
+    elif type == 'SGD':
+        data_train_loader = DataLoader(dataset=train_dataset,
+                                       batch_size=batch_size,
+                                       shuffle=True)
     else:
         NotImplementedError('ERROR: data type not supported!')
 
+    if batch_size is None:
+        batch_size = C_val.shape[0]
+    else:
+        batch_size = batch_size
+
     data_test_loader = DataLoader(dataset=val_dataset,
-                                  batch_size=C_val.shape[0],
+                                  batch_size=batch_size,
                                   shuffle=False)
 
     return data_train_loader, data_test_loader

@@ -1,9 +1,8 @@
 from matplotlib import pyplot as plt
 
 from base.trainer_base import TrainerBase
-from epoch_trainers.xy_epoch_trainer import XY_Epoch_Trainer
-from epoch_trainers.xy_epoch_tree_trainer import XY_Tree_Epoch_Trainer
-from logger import TensorboardWriter
+from epoch_trainers.cy_epoch_trainer import CY_Epoch_Trainer
+from epoch_trainers.cy_epoch_tree_trainer import CY_Epoch_Tree_Trainer
 
 
 class NNTrainer(TrainerBase):
@@ -23,19 +22,14 @@ class NNTrainer(TrainerBase):
         self.num_features = config['dataset']['num_features']
         self.feature_names = config['dataset']['feature_names']
 
-        # setup visualization writer instance
-        self.writer = TensorboardWriter(config.log_dir,
-                                        self.logger,
-                                        config['trainer']['tensorboard'])
-
         self.reg = reg
         if reg == 'Tree':
-            self.epoch_trainer = XY_Tree_Epoch_Trainer(
+            self.epoch_trainer = CY_Epoch_Tree_Trainer(
                 self.arch, self.epochs, self.writer, self.metric_ftns, self.config,
                 self.device, self.data_loader, self.valid_data_loader
             )
         else:
-            self.epoch_trainer = XY_Epoch_Trainer(
+            self.epoch_trainer = CY_Epoch_Trainer(
                 self.arch, self.epochs, self.writer, self.metric_ftns, self.config,
                 self.device, self.data_loader, self.valid_data_loader
             )

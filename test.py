@@ -1,33 +1,36 @@
 import argparse
+import collections
 import torch
-from tqdm import tqdm
-import data_loader.data_loaders as module_data
-import model.loss as module_loss
-import model.metric as module_metric
-import model.model as module_arch
-from parse_config import ConfigParser
+import numpy as np
+from experimentation.tree_final import perform_leakage_visualization
+from utils.parse_config import ConfigParser
+from utils import prepare_device
+import importlib
 
+# fix random seeds for reproducibility
+SEED = 42
+torch.manual_seed(SEED)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+np.random.seed(SEED)
 
 def main(config):
     logger = config.get_logger('test')
 
     # setup data_loader instances
-    data_loader = getattr(module_data, config['data_loader']['type'])(
-        config['data_loader']['args']['data_dir'],
-        batch_size=512,
-        shuffle=False,
-        validation_split=0.0,
-        training=False,
-        num_workers=2
-    )
+    dataloaders_module = importlib.import_module("data_loaders")
+    _, _, data_test_loader = config.init_obj('data_loader', dataloaders_module)
 
-    # build model architecture
-    model = config.init_obj('arch', module_arch)
-    logger.info(model)
+    # build model architecture, then print to console
+    arch_module = importlib.import_module("architectures")
+    arch = config.init_obj('arch', arch_module, config)
+    logger.info(arch.model)
 
-    # get function handles of loss and metrics
-    loss_fn = getattr(module_loss, config['loss'])
-    metric_fns = [getattr(module_metric, met) for met in config['metrics']]
+    # prepare for (multi-device) GPU training
+    device, device_ids = prepare_device(config['n_gpu'])
+    model = arch.model.to(device)
+    if len(device_ids) > 1:
+        model = torch.nn.DataParallel(model, device_ids=device_ids)
 
     logger.info('Loading checkpoint: {} ...'.format(config.resume))
     checkpoint = torch.load(config.resume)
@@ -69,7 +72,7 @@ def main(config):
 
 
 if __name__ == '__main__':
-    args = argparse.ArgumentParser(description='PyTorch Template')
+    args = argparse.ArgumentParser(description='Imperial Diploma Project')
     args.add_argument('-c', '--config', default=None, type=str,
                       help='config file path (default: None)')
     args.add_argument('-r', '--resume', default=None, type=str,

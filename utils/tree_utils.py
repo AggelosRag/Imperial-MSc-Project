@@ -269,3 +269,15 @@ def update_node_value(tree, delta, node_i):
     if len(parent_right) > 0:
         tree.tree_.value[parent_right] += delta
         update_node_value(tree, delta, parent_right)
+
+def extract_features_from_splits(tree):
+    feature_indices = set()
+
+    def recurse(node):
+        if tree.feature[node] != -2:  # -2 indicates a leaf node
+            feature_indices.add(tree.feature[node])
+            recurse(tree.children_left[node])
+            recurse(tree.children_right[node])
+
+    recurse(0)
+    return sorted(list(feature_indices))

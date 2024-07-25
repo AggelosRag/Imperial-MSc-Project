@@ -5,7 +5,7 @@ import torch
 from sklearn.model_selection import train_test_split
 from torch.utils.data import TensorDataset, DataLoader
 from torchvision import datasets, transforms
-from base import BaseDataLoader, TwoBatchTripletDataLoader, TwoBatchDataLoader
+from base import TwoBatchTripletDataLoader, TwoBatchDataLoader
 
 
 def get_mnist_dataLoader(data_dir='./datasets/parabola',
@@ -145,8 +145,7 @@ def get_mnist_dataLoader(data_dir='./datasets/parabola',
     # C = scaler_C.fit_transform(C)
 
     # Split the data
-    X_train, X_val, C_train, C_val, y_train, y_val = train_test_split(X, C,
-                                                                      y,
+    X_train, X_val, C_train, C_val, y_train, y_val = train_test_split(X, C, y,
                                                                       test_size=0.5,
                                                                       random_state=42)
     # Convert to PyTorch tensors
@@ -157,6 +156,13 @@ def get_mnist_dataLoader(data_dir='./datasets/parabola',
     X_val = torch.tensor(X_val[:8858], dtype=torch.float32)
     C_val = torch.tensor(C_val[:8858], dtype=torch.float32)
     y_val = torch.tensor(y_val[:8858], dtype=torch.long)
+
+    # plot a bar plot with the number of concepts equal to 1 per class
+    # for i in range(3):
+    #     print(f'Class {i}')
+    #     class_digit = C_train[y_train == i]
+    #     for j in range(12):
+    #         print(f'Concept {j}: {torch.sum((class_digit[:, j] == 1).int())}')
 
     # Create DataLoader
     train_dataset = TensorDataset(X_train, C_train, y_train)
@@ -339,3 +345,11 @@ def get_mnist_cy_dataLoader(ratio=0.2,
                                   shuffle=False)
 
     return data_train_loader, data_test_loader
+
+def collate_fn(batch):
+    data, concepts, labels, indices = zip(*batch)
+    data = torch.stack(data)
+    concepts = torch.stack(concepts)
+    labels = torch.stack(labels)
+    indices = torch.tensor(indices)
+    return data, concepts, labels, indices

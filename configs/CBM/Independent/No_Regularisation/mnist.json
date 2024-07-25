@@ -1,0 +1,50 @@
+{
+    "name": "cbm_mnist_L2_0_ind_bs=206",
+    "n_gpu": 1,
+
+    "arch": {
+        "type": "MNISTCBMArchitecture",
+        "args": {}
+    },
+    "model": {
+        "xc_lr": 0.001,
+        "xc_weight_decay": 0,
+        "cy_lr": 0.001,
+        "cy_weight_decay": 0
+    },
+    "dataset": {
+        "num_classes": 3,
+        "num_concepts": 12,
+        "train_size": 8858,
+        "concept_names": ["thickness_small", "thickness_medium", "thickness_large", "thickness_xlarge",
+                         "width_small", "width_medium", "width_large", "width_xlarge",
+                         "length_small", "length_medium", "length_large", "length_xlarge"],
+        "class_names": ["6", "8", "9"],
+        "contour_plot": 0
+    },
+    "data_loader": {
+        "type": "get_mnist_dataLoader",
+        "args":{
+            "data_dir": "./datasets/MNIST",
+            "type": "Two-Batch",
+            "batch_size": 206
+        }
+    },
+    "trainer": {
+        "type": "IndependentCBMTrainer",
+        "args": {},
+        "xc_epochs": 100,
+        "cy_epochs": 100,
+        "save_dir": "saved/",
+        "save_period": 1000,
+        "verbosity": 2,
+        "monitor": "off",
+        "early_stop": 10,
+        "tensorboard": true
+    },
+    "regularisation": {
+        "type": "L2",
+        "min_samples_leaf": 150,
+        "snapshot_epochs": 50
+    }
+}

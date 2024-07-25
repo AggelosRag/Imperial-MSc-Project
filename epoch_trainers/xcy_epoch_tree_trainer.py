@@ -1,24 +1,22 @@
 import numpy as np
 import torch
 from torch.utils.data import TensorDataset, DataLoader
-
 from base.epoch_trainer_base import EpochTrainerBase
-from logger import MetricsLogger
-from utils import SimplerMetricTracker
+from loggers.joint_cbm_logger import JointCBMLogger
+from loggers.cy_logger import CYLogger
 
 class XCY_Tree_Epoch_Trainer(EpochTrainerBase):
     """
     Trainer Epoch class using Tree Regularization
     """
 
-    def __init__(self, arch, epochs, config, device,
-                 data_loader, valid_data_loader=None, lr_scheduler=None):
+    def __init__(self, arch, config, device, data_loader, cbm_mode,
+                 valid_data_loader=None, iteration=None, lr_scheduler=None):
 
-        super(XCY_Tree_Epoch_Trainer, self).__init__()
+        super(XCY_Tree_Epoch_Trainer, self).__init__(arch, config, iteration)
 
         # Extract the configuration parameters
         self.tree_reg_mode = config['regularisation']['tree_reg_mode']
-        self.epochs = epochs
         self.config = config
         self.device = device
         self.train_loader = data_loader
@@ -38,6 +36,7 @@ class XCY_Tree_Epoch_Trainer(EpochTrainerBase):
         self.reg_strength = config['regularisation']['reg_strength']
         self.mse_loss_strength = config['regularisation']['mse_loss_strength']
         self.min_samples_leaf = config['regularisation']['min_samples_leaf']
+        self.iteration = iteration
 
         self.do_validation = self.val_loader is not None
         self.log_step = int(np.sqrt(data_loader.batch_size))
@@ -49,15 +48,24 @@ class XCY_Tree_Epoch_Trainer(EpochTrainerBase):
             self.APLs_truth = []
             self.all_preds = []
 
-        self.metrics_tracker = MetricsLogger(
-              iteration=1,
-              tb_path=str(self.config.log_dir),
-              output_path=str(self.config.save_dir),
-              train_loader=self.train_loader,
-              val_loader=self.val_loader,
-              n_classes=self.config['dataset']['num_classes'],
-              n_concepts=self.config['dataset']['num_concepts'],
-              device=self.device)
+        self.cbm_mode = cbm_mode
+        # Initialize the metrics tracker
+        if cbm_mode == 'joint':
+            self.metrics_tracker = JointCBMLogger(config, iteration=1,
+                                                  tb_path=str(self.config.log_dir),
+                                                  output_path=str(self.config.save_dir),
+                                                  train_loader=self.train_loader,
+                                                  val_loader=self.val_loader,
+                                                  device=self.device)
+        elif cbm_mode == 'sequential':
+            self.metrics_tracker = CYLogger(config, iteration=1,
+                                           tb_path=str(self.config.log_dir),
+                                           output_path=str(self.config.save_dir),
+                                           train_loader=self.train_loader,
+                                           val_loader=self.val_loader,
+                                           device=self.device)
+        else:
+            raise ValueError(f"Unknown CBM mode: {cbm_mode}")
         self.metrics_tracker.begin_run()
 
         # check if selective net is used
@@ -68,6 +76,7 @@ class XCY_Tree_Epoch_Trainer(EpochTrainerBase):
 
     def _train_epoch(self, epoch):
 
+        print(f"Training Epoch {epoch}:")
         self.metrics_tracker.begin_epoch()
 
         self.model.mn_model.concept_predictor.train()
@@ -140,9 +149,8 @@ class XCY_Tree_Epoch_Trainer(EpochTrainerBase):
                 y_hat_sr = torch.cat([y_hat_sr, y_hat_sr_rest])
 
             # Calculate the APL
-            APL, fid, fi, tree = self._calculate_APL(
-                self.min_samples_leaf, C_pred, y_pred
-            )
+            APL, fid, fi, tree = self._calculate_APL(self.min_samples_leaf,
+                                                     C_pred, y_pred)
             self.metrics_tracker.update_batch(update_dict_or_key='APL',
                                               value=APL,
                                               batch_size=batch_size,
@@ -213,14 +221,15 @@ class XCY_Tree_Epoch_Trainer(EpochTrainerBase):
 
         #visualize last tree
         if epoch % self.config['regularisation']['snapshot_epochs'] == 0:
-            self._visualize_tree(tree, self.config, epoch, APL,
-                                 'None', 'None')
+            self._visualize_tree(tree, self.config, epoch, APL, 'None', 'None',
+                                 mode='train', iteration=self.iteration)
         return log
 
 
 
     def _valid_epoch(self, epoch):
 
+        print(f"Validation Epoch {epoch}:")
         self.model.mn_model.concept_predictor.eval()
         self.model.mn_model.label_predictor.eval()
         self.model.sr_model.eval()
@@ -308,9 +317,8 @@ class XCY_Tree_Epoch_Trainer(EpochTrainerBase):
                     y_pred = torch.vstack([y_pred, y_pred_rest])
 
                 # Calculate the APL
-                APL, fid, fi, tree = self._calculate_APL(
-                    self.min_samples_leaf, C_pred, y_pred
-                )
+                APL, fid, fi, tree = self._calculate_APL(self.min_samples_leaf,
+                                                         C_pred, y_pred)
                 self.metrics_tracker.update_batch(update_dict_or_key='APL',
                                                   value=APL,
                                                   batch_size=batch_size,

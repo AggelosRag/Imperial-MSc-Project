@@ -1,45 +1,44 @@
 from matplotlib import pyplot as plt
 
-from base.trainer_base import TrainerBase
 from epoch_trainers.xcy_epoch_trainer import XCY_Epoch_Trainer
 from epoch_trainers.xcy_epoch_tree_trainer import XCY_Tree_Epoch_Trainer
 
 
-class JointCBMTrainer(TrainerBase):
+class JointCBMTrainer:
 
     def __init__(self, arch, config, device, data_loader, valid_data_loader,
-                 reg=None):
-
-        super(JointCBMTrainer, self).__init__(arch.model, config, arch.optimizer)
+                 reg=None, iteration=None):
 
         self.arch = arch
         self.config = config
         self.device = device
         self.data_loader = data_loader
         self.valid_data_loader = valid_data_loader
+        self.iteration = iteration
 
         self.epochs = config['trainer']['epochs']
         self.num_concepts = config['dataset']['num_concepts']
-        self.feature_names = config['dataset']['feature_names']
+        self.concept_names = config['dataset']['concept_names']
 
         self.reg = reg
         if reg == 'Tree':
             self.epoch_trainer = XCY_Tree_Epoch_Trainer(
-                self.arch, self.epochs,
-                self.config, self.device, self.data_loader,
-                self.valid_data_loader)
+                self.arch, self.config,
+                self.device, self.data_loader,
+                'joint',
+                self.valid_data_loader,
+                self.iteration
+            )
         else:
-            self.epoch_trainer = XCY_Epoch_Trainer(
-                self.arch, self.epochs,
-                self.config, self.device, self.data_loader,
-                self.valid_data_loader)
-
+            self.epoch_trainer = XCY_Epoch_Trainer(self.arch, self.config,
+                                                   self.device,
+                                                   self.data_loader, 'joint',
+                                                   self.valid_data_loader,
+                                                   self.iteration)
 
     def train(self):
-        epoch_trainer = self.epoch_trainer
-        epochs = self.epochs
-        self._training_loop(epochs, epoch_trainer)
 
+        self.epoch_trainer._training_loop(self.epochs)
         self.plot()
 
 
@@ -76,7 +75,7 @@ class JointCBMTrainer(TrainerBase):
         for i in range(self.config["dataset"]['num_concepts']):
             plt.plot(epochs_less,
                      [train_bce_losses[j][i] for j in range(10, self.epochs)],
-                     label=f'Train BCE Loss {self.feature_names[i]}')
+                     label=f'Train BCE Loss {self.concept_names[i]}')
         plt.title('Training BCE Loss per Concept')
         plt.xlabel('Epochs')
         plt.ylabel('BCE Loss')
@@ -86,7 +85,7 @@ class JointCBMTrainer(TrainerBase):
         for i in range(self.config["dataset"]['num_concepts']):
             plt.plot(epochs_less,
                      [val_bce_losses[j][i] for j in range(10, self.epochs)],
-                     label=f'Val BCE Loss {self.feature_names[i]}')
+                     label=f'Val BCE Loss {self.concept_names[i]}')
         plt.title('Validation BCE Loss per Concept')
         plt.xlabel('Epochs')
         plt.ylabel('BCE Loss')
@@ -152,7 +151,7 @@ class JointCBMTrainer(TrainerBase):
         plt.subplot(5, 2, 9)
         for i in range(self.config["dataset"]['num_concepts']):
             plt.plot(epochs, [fi[i] for fi in FI_train],
-                     label=f'{self.feature_names[i]}')
+                     label=f'{self.concept_names[i]}')
         plt.title('Feature Importances (Train)')
         plt.xlabel('Epochs')
         plt.ylabel('Feature Importances')
@@ -161,7 +160,7 @@ class JointCBMTrainer(TrainerBase):
         plt.subplot(5, 2, 10)
         for i in range(self.config["dataset"]['num_concepts']):
             plt.plot(epochs, [fi[i] for fi in FI_test],
-                     label=f'{self.feature_names[i]}')
+                     label=f'{self.concept_names[i]}')
         plt.title('Feature Importances (Test)')
         plt.xlabel('Epochs')
         plt.ylabel('Feature Importances')
@@ -169,5 +168,9 @@ class JointCBMTrainer(TrainerBase):
         plt.legend(loc='upper left')
 
         plt.tight_layout()
-        plt.savefig(str(self.config.log_dir) + '/plots.png')
-        plt.show()
+        if self.iteration is not None:
+            name = f'/joint_cbm_plots_expert_{self.iteration}.png'
+        else:
+            name = '/plots.png'
+        plt.savefig(str(self.config.log_dir) + name)
+        #plt.show()

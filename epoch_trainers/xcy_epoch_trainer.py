@@ -1,23 +1,29 @@
+import os
+import sys
+
 import numpy as np
 import torch
-from torch.utils.data import TensorDataset, DataLoader
-from logger.logger import MetricsLogger
+from sklearn.metrics import accuracy_score
+from tqdm import tqdm
+
+from loggers.joint_cbm_logger import JointCBMLogger
+from loggers.cy_logger import CYLogger
 
 from base.epoch_trainer_base import EpochTrainerBase
-from utils import SimplerMetricTracker
+from utils import compute_AUC
+
 
 class XCY_Epoch_Trainer(EpochTrainerBase):
     """
     Trainer Epoch class using Tree Regularization
     """
 
-    def __init__(self, arch, epochs, config, device,
-                 data_loader, valid_data_loader=None, lr_scheduler=None):
+    def __init__(self, arch, config, device, data_loader, cbm_mode,
+                 valid_data_loader=None, iteration=None, lr_scheduler=None):
 
-        super(XCY_Epoch_Trainer, self).__init__()
+        super(XCY_Epoch_Trainer, self).__init__(arch, config, iteration)
 
         # Extract the configuration parameters
-        self.epochs = epochs
         self.config = config
         self.device = device
         self.train_loader = data_loader
@@ -31,19 +37,34 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
         self.optimizer = arch.optimizer
         self.num_concepts = config['dataset']['num_concepts']
         self.min_samples_leaf = config['regularisation']['min_samples_leaf']
+        self.epochs = config['trainer']['epochs']
+        self.iteration = iteration
 
         self.do_validation = self.val_loader is not None
-        self.log_step = int(np.sqrt(data_loader.batch_size))
+        self.cbm_mode = cbm_mode
+        self.hard_concepts = self.arch.hard_concepts
+        self.soft_concepts = [i for i in range(self.num_concepts) if i not in self.hard_concepts]
 
-        self.metrics_tracker = MetricsLogger(
-              iteration=1,
-              tb_path=str(self.config.log_dir),
-              output_path=str(self.config.save_dir),
-              train_loader=self.train_loader,
-              val_loader=self.val_loader,
-              n_classes=self.config['dataset']['num_classes'],
-              n_concepts=self.config['dataset']['num_concepts'],
-              device=self.device)
+        combined_indices = self.hard_concepts + self.soft_concepts
+        self.sorted_concept_indices = torch.argsort(torch.tensor(combined_indices))
+
+        # Initialize the metrics tracker
+        if cbm_mode == 'joint':
+            self.metrics_tracker = JointCBMLogger(config, iteration=iteration,
+                                                  tb_path=str(self.config.log_dir),
+                                                  output_path=str(self.config.save_dir),
+                                                  train_loader=self.train_loader,
+                                                  val_loader=self.val_loader,
+                                                  device=self.device)
+        elif cbm_mode == 'sequential':
+            self.metrics_tracker = CYLogger(config, iteration=1,
+                                           tb_path=str(self.config.log_dir),
+                                           output_path=str(self.config.save_dir),
+                                           train_loader=self.train_loader,
+                                           val_loader=self.val_loader,
+                                           device=self.device)
+        else:
+            raise ValueError(f"Unknown CBM mode: {cbm_mode}")
         self.metrics_tracker.begin_run()
 
         # check if selective net is used
@@ -55,6 +76,7 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
 
     def _train_epoch(self, epoch):
 
+        print(f"Training Epoch {epoch}")
         self.metrics_tracker.begin_epoch()
 
         self.model.concept_predictor.train()
@@ -63,85 +85,116 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
             self.arch.selector.train()
             self.arch.aux_model.train()
 
-        for (X_batch, C_batch, y_batch), (X_rest, C_rest, y_rest) in self.train_loader:
-            batch_size = X_batch.size(0)
-            X_batch = X_batch.to(self.device)
-            C_batch = C_batch.to(self.device)
-            y_batch = y_batch.to(self.device)
+        with tqdm(total=len(self.train_loader), file=sys.stdout) as t:
+            for batch_idx, (X_batch, C_batch, y_batch) in enumerate(self.train_loader):
 
-            # Forward pass
-            C_pred = self.model.concept_predictor(X_batch)
-            y_pred = self.model.label_predictor(C_pred)
-            outputs = {"prediction_out": y_pred}
+                C_hard = C_batch[:, self.hard_concepts]
 
-            if self.selective_net:
-                out_selector = self.arch.selector(C_pred)
-                out_aux = self.arch.aux_model(C_pred)
-                outputs = {"prediction_out": y_pred, "selection_out": out_selector, "out_aux": out_aux}
+                batch_size = X_batch.size(0)
+                X_batch = X_batch.to(self.device)
+                C_hard = C_hard.to(self.device)
+                C_batch = C_batch.to(self.device)
+                y_batch = y_batch.to(self.device)
 
-            # Calculate Concept losses
-            loss_concept = self.criterion_concept(C_pred, C_batch)
-            bce_loss_per_concept = torch.mean(loss_concept, dim=0)
-            loss_concept_total = bce_loss_per_concept.sum()
-            self.metrics_tracker.update_batch(update_dict_or_key='concept_loss',
-                                              value=loss_concept_total.detach().item(),
-                                              batch_size=batch_size,
-                                              mode='train')
-            self.metrics_tracker.update_batch(update_dict_or_key='loss_per_concept',
-                                              value=list(bce_loss_per_concept.detach().numpy()),
-                                              batch_size=batch_size,
-                                              mode='train')
+                # Forward pass
+                C_pred_soft = self.model.concept_predictor(X_batch)
+                C_pred_concat = torch.cat((C_hard, C_pred_soft), dim=1)
+                C_pred = C_pred_concat[:, self.sorted_concept_indices]
+                y_pred = self.model.label_predictor(C_pred)
+                outputs = {"prediction_out": y_pred}
 
-            # Calculate Label losses
-            loss_label = self.criterion_label(outputs, y_batch)
-            self.metrics_tracker.update_batch(
-                update_dict_or_key=loss_label,
-                batch_size=batch_size,
-                mode='train')
+                if self.selective_net:
+                    out_selector = self.arch.selector(C_pred)
+                    out_aux = self.arch.aux_model(C_pred)
+                    outputs = {"prediction_out": y_pred, "selection_out": out_selector, "out_aux": out_aux}
 
-            # Track target training loss and accuracy
-            self.metrics_tracker.track_total_train_correct_per_epoch(
-                preds=outputs["prediction_out"], labels=y_batch
-            )
+                # Calculate Concept losses
+                if self.cbm_mode == 'joint':
+                    loss_concept = self.criterion_concept(C_pred, C_batch)
+                    bce_loss_per_concept = torch.mean(loss_concept, dim=0)
+                    loss_concept_total = bce_loss_per_concept.sum()
+                    self.metrics_tracker.update_batch(update_dict_or_key='concept_loss',
+                                                      value=loss_concept_total.detach().item(),
+                                                      batch_size=batch_size,
+                                                      mode='train')
+                    self.metrics_tracker.update_batch(update_dict_or_key='loss_per_concept',
+                                                      value=list(bce_loss_per_concept.detach().numpy()),
+                                                      batch_size=batch_size,
+                                                      mode='train')
 
-            # if we operate in SGD mode, then X_batch + X_rest = X
-            # We still need the complete dataset to compute the APL
-            # In full-batch GD, X_batch = X and X_rest = None
-            # if X_rest is not None:
-            #     X_rest = X_rest.to(self.device)
-            #
-            #     with torch.no_grad():
-            #         C_pred_rest = self.model.concept_predictor(X_rest)
-            #         y_pred_rest = self.model.label_predictor(C_pred_rest)
-            #
-            #     C_pred = torch.vstack([C_pred, C_pred_rest])
-            #     y_pred = torch.vstack([y_pred, y_pred_rest])
-            #
-            # # Calculate the APL
-            # APL, fid, fi, tree = self._calculate_APL(
-            #     self.min_samples_leaf, C_pred, y_pred
-            # )
-            # self.metrics_tracker.update_batch(update_dict_or_key='APL',
-            #                                   value=APL,
-            #                                   batch_size=batch_size,
-            #                                   mode='train')
-            # self.metrics_tracker.update_batch(update_dict_or_key='fidelity',
-            #                                   value=fid,
-            #                                   batch_size=batch_size,
-            #                                   mode='train')
-            # self.metrics_tracker.update_batch(update_dict_or_key='feature_importance',
-            #                                   value=fi,
-            #                                   batch_size=batch_size,
-            #                                   mode='train')
+                # Calculate Label losses
+                loss_label = self.criterion_label(outputs, y_batch)
+                self.metrics_tracker.update_batch(
+                    update_dict_or_key=loss_label,
+                    batch_size=batch_size,
+                    mode='train')
 
-            loss = self.alpha * loss_concept_total + loss_label["target_loss"]
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-            self.metrics_tracker.update_batch(update_dict_or_key='loss',
-                                              value=loss.detach().item(),
-                                              batch_size=batch_size,
-                                              mode='train')
+                # Track target training loss and accuracy
+                self.metrics_tracker.track_total_train_correct_per_epoch(
+                    preds=outputs["prediction_out"], labels=y_batch
+                )
+
+                # if we operate in SGD mode, then X_batch + X_rest = X
+                # We still need the complete dataset to compute the APL
+                # In full-batch GD, X_batch = X and X_rest = None
+                if (batch_idx == len(self.train_loader) - 1):
+                    X_all = self.train_loader.dataset[:][0].to(self.device)
+                    C_all = self.train_loader.dataset[:][1].to(self.device)
+                    C_hard_all = C_all[:, self.hard_concepts].to(self.device)
+
+                    with torch.no_grad():
+                        C_pred_soft_all = self.model.concept_predictor(X_all)
+                        C_pred_concat = torch.cat((C_hard_all, C_pred_soft_all), dim=1)
+                        C_pred = C_pred_concat[:, self.sorted_concept_indices]
+                        y_pred = self.model.label_predictor(C_pred)
+
+                    # Calculate the APL
+                    APL, fid, fi, tree = self._calculate_APL(self.min_samples_leaf,
+                                                             C_pred, y_pred)
+                    self.metrics_tracker.update_batch(update_dict_or_key='APL',
+                                                      value=APL,
+                                                      batch_size=len(self.train_loader.dataset),
+                                                      mode='train')
+                    self.metrics_tracker.update_batch(update_dict_or_key='fidelity',
+                                                      value=fid,
+                                                      batch_size=len(self.train_loader.dataset),
+                                                      mode='train')
+                    self.metrics_tracker.update_batch(
+                        update_dict_or_key='feature_importance',
+                        value=fi,
+                        batch_size=len(self.train_loader.dataset),
+                        mode='train')
+
+                    # if (epoch == self.epochs - 1) and self.selective_net == False:
+                    #     # visualize last tree
+                    #     self._visualize_tree(tree, self.config, epoch, APL, 'None',
+                    #                          'None',
+                    #                          iteration=str(self.iteration) + '_joint',
+                    #                          mode='train')
+
+                    if (epoch == self.epochs - 1) and self.selective_net == False:
+                        self._build_tree_with_fixed_roots(
+                            self.min_samples_leaf, C_pred, y_pred,
+                            self.gt_train_tree, 'train', None,
+                            iteration=str(self.iteration) + '_joint'
+                        )
+
+                if self.cbm_mode == 'joint':
+                    loss = self.alpha * loss_concept_total + loss_label["target_loss"]
+                else:
+                    loss = loss_label["target_loss"]
+
+                self.optimizer.zero_grad()
+                loss.backward()
+                self.optimizer.step()
+                self.metrics_tracker.update_batch(update_dict_or_key='loss',
+                                                  value=loss.detach().item(),
+                                                  batch_size=batch_size,
+                                                  mode='train')
+
+                t.set_postfix(
+                    batch_id='{0}'.format(batch_idx + 1))
+                t.update()
 
         if self.do_validation:
             self._valid_epoch(epoch)
@@ -153,15 +206,12 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
         if self.lr_scheduler is not None:
             self.lr_scheduler.step()
 
-        #visualize last tree
-        # if epoch % self.config['regularisation']['snapshot_epochs'] == 0:
-        #     self._visualize_tree(tree, self.config, epoch, APL,
-        #                          'None', 'None')
         return log
 
 
     def _valid_epoch(self, epoch):
 
+        print(f"Validation Epoch {epoch}")
         self.model.concept_predictor.eval()
         self.model.label_predictor.eval()
         if self.selective_net:
@@ -169,105 +219,135 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
             self.arch.aux_model.eval()
 
         with torch.no_grad():
-            for (X_batch, C_batch, y_batch), (X_rest, C_rest, y_rest) in self.val_loader:
-                batch_size = X_batch.size(0)
-                X_batch = X_batch.to(self.device)
-                C_batch = C_batch.to(self.device)
-                y_batch = y_batch.to(self.device)
+            with tqdm(total=len(self.val_loader), file=sys.stdout) as t:
+                for batch_idx, (X_batch, C_batch, y_batch) in enumerate(self.val_loader):
 
-                # Forward pass
-                C_pred = self.model.concept_predictor(X_batch)
-                y_pred = self.model.label_predictor(C_pred)
-                outputs = {"prediction_out": y_pred}
+                    C_hard = C_batch[:, self.hard_concepts]
 
-                if self.selective_net:
-                    out_selector = self.arch.selector(C_pred)
-                    out_aux = self.arch.aux_model(C_pred)
-                    outputs = {"prediction_out": y_pred,
-                               "selection_out": out_selector,
-                               "out_aux": out_aux}
+                    batch_size = X_batch.size(0)
+                    X_batch = X_batch.to(self.device)
+                    C_batch = C_batch.to(self.device)
+                    C_hard = C_hard.to(self.device)
+                    y_batch = y_batch.to(self.device)
 
-                # save outputs for selectivenet
-                if self.selective_net:
+                    # Forward pass
+                    C_pred_soft = self.model.concept_predictor(X_batch)
+                    C_pred_concat = torch.cat((C_hard, C_pred_soft), dim=1)
+                    C_pred = C_pred_concat[:, self.sorted_concept_indices]
+                    y_pred = self.model.label_predictor(C_pred)
+                    outputs = {"prediction_out": y_pred}
+
+                    if self.selective_net:
+                        out_selector = self.arch.selector(C_pred)
+                        out_aux = self.arch.aux_model(C_pred)
+                        outputs = {"prediction_out": y_pred,
+                                   "selection_out": out_selector,
+                                   "out_aux": out_aux}
+
+                    # save outputs for selectivenet
+                    if self.selective_net:
+                        self.metrics_tracker.update_batch(
+                            update_dict_or_key='out_put_sel_proba',
+                            value=out_selector.detach().cpu(),
+                            batch_size=batch_size,
+                            mode='val')
+                        self.metrics_tracker.update_batch(
+                            update_dict_or_key='out_put_class',
+                            value=y_pred.detach().cpu(),
+                            batch_size=batch_size,
+                            mode='val')
+                        self.metrics_tracker.update_batch(
+                            update_dict_or_key='out_put_target',
+                            value=y_batch.detach().cpu(),
+                            batch_size=batch_size,
+                            mode='val')
+
+                    # Calculate Concept losses
+                    if self.cbm_mode == 'joint':
+                        loss_concept = self.criterion_concept(C_pred, C_batch)
+                        bce_loss_per_concept = torch.mean(loss_concept, dim=0)
+                        loss_concept_total = bce_loss_per_concept.sum()
+                        self.metrics_tracker.update_batch(
+                            update_dict_or_key='concept_loss',
+                            value=loss_concept_total.detach().item(),
+                            batch_size=batch_size,
+                            mode='val')
+                        self.metrics_tracker.update_batch(
+                            update_dict_or_key='loss_per_concept',
+                            value=list(bce_loss_per_concept.detach().numpy()),
+                            batch_size=batch_size,
+                            mode='val')
+
+                    # Calculate Label losses
+                    loss_label = self.criterion_label(outputs, y_batch)
                     self.metrics_tracker.update_batch(
-                        update_dict_or_key='out_put_sel_proba',
-                        value=out_selector.detach().cpu(),
+                        update_dict_or_key=loss_label,
                         batch_size=batch_size,
                         mode='val')
-                    self.metrics_tracker.update_batch(
-                        update_dict_or_key='out_put_class',
-                        value=y_pred.detach().cpu(),
-                        batch_size=batch_size,
-                        mode='val')
-                    self.metrics_tracker.update_batch(
-                        update_dict_or_key='out_put_target',
-                        value=y_batch.detach().cpu(),
-                        batch_size=batch_size,
-                        mode='val')
 
-                # Calculate Concept losses
-                loss_concept = self.criterion_concept(C_pred, C_batch)
-                bce_loss_per_concept = torch.mean(loss_concept, dim=0)
-                loss_concept_total = bce_loss_per_concept.sum()
-                self.metrics_tracker.update_batch(
-                    update_dict_or_key='concept_loss',
-                    value=loss_concept_total.detach().item(),
-                    batch_size=batch_size,
-                    mode='val')
-                self.metrics_tracker.update_batch(
-                    update_dict_or_key='loss_per_concept',
-                    value=list(bce_loss_per_concept.detach().numpy()),
-                    batch_size=batch_size,
-                    mode='val')
+                    # Track target training loss and accuracy
+                    self.metrics_tracker.track_total_val_correct_per_epoch(
+                        preds=outputs["prediction_out"], labels=y_batch
+                    )
 
-                # Calculate Label losses
-                loss_label = self.criterion_label(outputs, y_batch)
-                self.metrics_tracker.update_batch(
-                    update_dict_or_key=loss_label,
-                    batch_size=batch_size,
-                    mode='val')
+                    # if we operate in SGD mode, then X_batch + X_rest = X
+                    # We still need the complete dataset to compute the APL
+                    # In full-batch GD, X_batch = X and X_rest = None
+                    if (batch_idx == len(self.val_loader) - 1):
+                        X_all = self.val_loader.dataset[:][0].to(self.device)
+                        C_all = self.val_loader.dataset[:][1].to(self.device)
+                        C_hard_all = C_all[:, self.hard_concepts].to(self.device)
 
-                # Track target training loss and accuracy
-                self.metrics_tracker.track_total_val_correct_per_epoch(
-                    preds=outputs["prediction_out"], labels=y_batch
-                )
+                        with torch.no_grad():
+                            C_pred_soft_all = self.model.concept_predictor(X_all)
+                            C_pred_concat = torch.cat((C_hard_all, C_pred_soft_all),dim=1)
+                            C_pred = C_pred_concat[:, self.sorted_concept_indices]
+                            y_pred = self.model.label_predictor(C_pred)
 
-                # if we operate in SGD mode, then X_batch + X_rest = X
-                # We still need the complete dataset to compute the APL
-                # In full-batch GD, X_batch = X and X_rest = None
-                # if X_rest is not None:
-                #     X_rest = X_rest.to(self.device)
-                #
-                #     with torch.no_grad():
-                #         C_pred_rest = self.model.concept_predictor(X_rest)
-                #         y_pred_rest = self.model.label_predictor(C_pred_rest)
-                #
-                #     C_pred = torch.vstack([C_pred, C_pred_rest])
-                #     y_pred = torch.vstack([y_pred, y_pred_rest])
-                #
-                # # Calculate the APL
-                # APL, fid, fi, tree = self._calculate_APL(
-                #     self.min_samples_leaf, C_pred, y_pred
-                # )
-                # self.metrics_tracker.update_batch(update_dict_or_key='APL',
-                #                                   value=APL,
-                #                                   batch_size=batch_size,
-                #                                   mode='val')
-                # self.metrics_tracker.update_batch(update_dict_or_key='fidelity',
-                #                                   value=fid,
-                #                                   batch_size=batch_size,
-                #                                   mode='val')
-                # self.metrics_tracker.update_batch(
-                #     update_dict_or_key='feature_importance',
-                #     value=fi,
-                #     batch_size=batch_size,
-                #     mode='val')
+                        # Calculate the APL
+                        APL, fid, fi, tree = self._calculate_APL(
+                            self.min_samples_leaf, C_pred, y_pred)
+                        self.metrics_tracker.update_batch(update_dict_or_key='APL',
+                                                          value=APL,
+                                                          batch_size=len(self.val_loader.dataset),
+                                                          mode='val')
+                        self.metrics_tracker.update_batch(
+                            update_dict_or_key='fidelity',
+                            value=fid,
+                            batch_size=len(self.val_loader.dataset),
+                            mode='val')
+                        self.metrics_tracker.update_batch(
+                            update_dict_or_key='feature_importance',
+                            value=fi,
+                            batch_size=len(self.val_loader.dataset),
+                            mode='val')
 
-                loss = self.alpha * loss_concept_total + loss_label["target_loss"]
-                self.metrics_tracker.update_batch(update_dict_or_key='loss',
-                                                  value=loss.detach().item(),
-                                                  batch_size=batch_size,
-                                                  mode='val')
+                        # if (epoch == self.epochs - 1) and self.selective_net == False:
+                        #     # visualize last tree
+                        #     self._visualize_tree(tree, self.config, epoch, APL,
+                        #                          'None', 'None', mode='val',
+                        #                          iteration=str(self.iteration) + '_joint')
+
+                        if (epoch == self.epochs - 1) and self.selective_net == False:
+                            self._build_tree_with_fixed_roots(
+                                self.min_samples_leaf, C_pred, y_pred,
+                                self.gt_val_tree, 'val', None,
+                                iteration=str(self.iteration) + '_joint'
+                            )
+
+                    if self.cbm_mode == 'joint':
+                        loss = self.alpha * loss_concept_total + loss_label[
+                            "target_loss"]
+                    else:
+                        loss = loss_label["target_loss"]
+                    self.metrics_tracker.update_batch(update_dict_or_key='loss',
+                                                      value=loss.detach().item(),
+                                                      batch_size=batch_size,
+                                                      mode='val')
+
+                    t.set_postfix(
+                        batch_id='{0}'.format(batch_idx + 1))
+                    t.update()
 
         # Update the epoch metrics
         if self.selective_net:
@@ -279,3 +359,140 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
             # should be lower
             self.metrics_tracker.evaluate_incorrectly(selection_threshold=self.config['selectivenet']['selection_threshold'])
             self.metrics_tracker.evaluate_coverage_stats(selection_threshold=self.config['selectivenet']['selection_threshold'])
+
+
+    def _save_selected_results(self, loader, iteration, mode):
+        tensor_X_rej = torch.FloatTensor().to(self.device)
+        tensor_X_acc = torch.FloatTensor().to(self.device)
+        tensor_C_rej = torch.FloatTensor().to(self.device)
+        tensor_C_pred_rej = torch.FloatTensor().to(self.device)
+        tensor_C_acc = torch.FloatTensor().to(self.device)
+        tensor_C_pred_acc = torch.FloatTensor().to(self.device)
+        tensor_y_acc = torch.LongTensor().to(self.device)
+        tensor_y_pred_acc = torch.FloatTensor().to(self.device)
+        tensor_y_rej = torch.LongTensor().to(self.device)
+        tensor_y_pred_rej = torch.FloatTensor().to(self.device)
+
+        with torch.no_grad():
+            with tqdm(total=len(loader), file=sys.stdout) as t:
+                for batch_id, (X_batch, C_batch, y_batch) in enumerate(loader):
+                    X_batch = X_batch.to(self.device)
+                    C_batch = C_batch.to(self.device)
+                    y_batch = y_batch.to(self.device)
+
+                    C_pred = self.model.concept_predictor(X_batch)
+                    out_selector = self.arch.selector(C_pred)
+                    y_pred = self.model.label_predictor(C_pred)
+                    selection_threshold = self.config['selectivenet']['selection_threshold']
+                    arr_rej_indices = torch.nonzero(out_selector < selection_threshold, as_tuple=True)[0]
+                    arr_sel_indices = torch.nonzero(out_selector >= selection_threshold, as_tuple=True)[0]
+
+                    if arr_rej_indices.size(0) > 0:
+                        g_X = X_batch[arr_rej_indices, :, :, :]
+                        g_concepts = C_batch[arr_rej_indices, :]
+                        g_y = y_batch[arr_rej_indices]
+                        g_ypred = y_pred[arr_rej_indices, :]
+                        g_pred_concepts = C_pred[arr_rej_indices, :]
+
+                        tensor_X_rej = torch.cat((tensor_X_rej, g_X.cpu()), dim=0)
+                        tensor_C_rej = torch.cat((tensor_C_rej, g_concepts), dim=0)
+                        tensor_y_rej = torch.cat((tensor_y_rej, g_y), dim=0)
+                        tensor_y_pred_rej = torch.cat((tensor_y_pred_rej, g_ypred), dim=0)
+                        tensor_C_pred_rej = torch.cat((tensor_C_pred_rej, g_pred_concepts), dim=0)
+
+                    if arr_sel_indices.size(0) > 0:
+                        g_X = X_batch[arr_sel_indices, :, :, :]
+                        g_y = y_batch[arr_sel_indices]
+                        g_ypred = y_pred[arr_sel_indices, :]
+                        g_concepts = C_batch[arr_sel_indices, :]
+                        g_pred_concepts = C_pred[arr_sel_indices, :]
+
+                        tensor_X_acc = torch.cat((tensor_X_acc, g_X.cpu()), dim=0)
+                        tensor_y_acc = torch.cat((tensor_y_acc, g_y), dim=0)
+                        tensor_C_acc = torch.cat((tensor_C_acc, g_concepts), dim=0)
+                        tensor_y_pred_acc = torch.cat((tensor_y_pred_acc, g_ypred), dim=0)
+                        tensor_C_pred_acc = torch.cat((tensor_C_pred_acc, g_pred_concepts), dim=0)
+
+                    # plot a bar plot with the number of concepts equal to 1 per class
+                    # for i in range(3):
+                    #     print(f'Class {i}')
+                    #     class_digit = tensor_C_acc[tensor_y_acc == i]
+                    #     for j in range(12):
+                    #         print(
+                    #             f'Concept {j}: {torch.sum((class_digit[:, j] == 1).int())}')
+
+
+                    t.set_postfix(
+                        batch_id='{0}'.format(batch_id + 1))
+                    t.update()
+
+        tensor_X_rej = tensor_X_rej.cpu()
+        tensor_X_acc = tensor_X_acc.cpu()
+        tensor_C_rej = tensor_C_rej.cpu()
+        tensor_C_acc = tensor_C_acc.cpu()
+        tensor_y_rej = tensor_y_rej.cpu()
+        tensor_y_pred_rej = tensor_y_pred_rej.cpu()
+        tensor_y_acc = tensor_y_acc.cpu()
+        tensor_y_pred_acc = tensor_y_pred_acc.cpu()
+        tensor_C_pred_acc = tensor_C_pred_acc.cpu()
+        tensor_C_pred_rej = tensor_C_pred_rej.cpu()
+
+        # plot a bar plot with the number of concepts equal to 1 per class
+        # for i in range(3):
+        #     print(f'Class {i}')
+        #     class_digit = tensor_C_pred_acc[tensor_y_acc == i]
+        #     for j in range(12):
+        #         print(
+        #             f'Concept {j}: {torch.sum((class_digit[:, j] == 1).int())}')
+
+        # Fit a tree
+        APL, fid, fi, tree = self._calculate_APL(self.min_samples_leaf,
+                                                 tensor_C_pred_acc,
+                                                 tensor_y_pred_acc)
+
+        self._visualize_tree(tree, self.config, None, APL, 'None', 'None',
+                             mode=f'selected_{mode}_samples', iteration=iteration)
+
+        print(f"APL: {APL}")
+        print(f"Fidelity: {fid}")
+        print(f"Feature Importance: {fi}")
+
+        print("Output sizes: ")
+        print(f"tensor_X size: {tensor_X_acc.size()}")
+        print(f"tensor_C size: {tensor_X_rej.size()}")
+        print(f"tensor_y_rej size: {tensor_y_rej.size()}")
+        print(f"tensor_y_pred_rej size: {tensor_y_pred_rej.size()}")
+        print(f"tensor_y_acc size: {tensor_y_acc.size()}")
+        print(f"tensor_y_pred_acc size: {tensor_y_pred_acc.size()}")
+
+        print("------------------- Metrics ---------------------")
+        proba = torch.nn.Softmax(dim=1)(tensor_y_pred_rej)[:, 1]
+        val_auroc, val_aurpc = compute_AUC(tensor_y_rej, pred=proba)
+        acc_rej = accuracy_score(tensor_y_rej.cpu().numpy(),
+                                tensor_y_pred_rej.cpu().argmax(dim=1).numpy())
+        print(f"Accuracy of the rejected samples: {acc_rej * 100} (%)")
+        print(f"Val AUROC of the rejected samples: {val_auroc} (0-1)")
+
+        proba = torch.nn.Softmax(dim=1)(tensor_y_pred_acc)[:, 1]
+        val_auroc, val_aurpc = compute_AUC(tensor_y_acc, pred=proba)
+        acc_acc = accuracy_score(tensor_y_acc.cpu().numpy(),
+                                tensor_y_pred_acc.cpu().argmax(dim=1).numpy())
+        print(f"Accuracy of the accepted samples: {acc_acc * 100} (%)")
+        print(f"Val AUROC of the accepted samples: {val_auroc} (0-1)")
+
+        # output_path = os.path.join(self.config.save_dir, "intermediate_tensors")
+        # if not os.path.exists(output_path):
+        #     os.makedirs(output_path)
+
+        # torch.save(tensor_X_rej, os.path.join(output_path, f"iteration_{iteration}_{mode}_tensor_X.pt"))
+        # torch.save(tensor_C_rej, os.path.join(output_path, f"iteration_{iteration}_{mode}_tensor_C.pt"))
+        # torch.save(tensor_y_rej, os.path.join(output_path, f"iteration_{iteration}_{mode}_tensor_y.pt"))
+
+        return (tensor_X_acc, tensor_C_acc, tensor_y_acc, fi,
+                tensor_X_rej, tensor_C_rej, tensor_y_rej)
+
+    def load_gt_train_tree(self, tree):
+        self.gt_train_tree = tree
+
+    def load_gt_val_tree(self, tree):
+        self.gt_val_tree = tree

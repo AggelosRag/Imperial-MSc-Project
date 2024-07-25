@@ -2,11 +2,8 @@ import argparse
 import collections
 import torch
 import numpy as np
-import model.loss as module_loss
-import model.metric as module_metric
-import model.model as module_arch
 from experimentation.tree_final import perform_leakage_visualization
-from parse_config import ConfigParser
+from utils.parse_config import ConfigParser
 from utils import prepare_device
 import importlib
 
@@ -29,6 +26,7 @@ def main(config):
     # build model architecture, then print to console
     arch_module = importlib.import_module("architectures")
     arch = config.init_obj('arch', arch_module, config)
+    logger.info("\n")
     logger.info(arch.model)
 
     # prepare for (multi-device) GPU training
@@ -59,12 +57,6 @@ def main(config):
                               data_loader=data_loader,
                               valid_data_loader=valid_data_loader,
                               reg=reg)
-    # trainer = Trainer(arch=arch, metric_ftns=metrics,
-    #                   config=config,
-    #                   device=device,
-    #                   data_loader=data_loader,
-    #                   valid_data_loader=valid_data_loader,
-    #                   reg=reg)
 
     trainer.train()
 

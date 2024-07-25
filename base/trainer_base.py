@@ -1,19 +1,27 @@
+import numpy as np
 import torch
 from abc import abstractmethod
 from numpy import inf
-from logger import TensorboardWriter
+import os
 
 
 class TrainerBase:
     """
     Base class for all trainers
     """
-    def __init__(self, model, config, optimizer):
-        self.config = config
-        self.logger = config.get_logger('trainer', config['trainer']['verbosity'])
 
-        self.model = model
-        self.optimizer = optimizer
+    def __init__(self, arch, config, expert=None):
+        self.config = config
+        self.logger = config.get_logger('trainer',
+                                        config['trainer']['verbosity'])
+
+        self.arch = arch
+        self.model = arch.model
+        if hasattr(arch, "optimizer"):
+            self.optimizer = arch.optimizer
+        else:
+            self.optimizer = arch.cy_optimizer
+        self.expert = expert
 
         cfg_trainer = config['trainer']
         self.save_period = cfg_trainer['save_period']
@@ -33,38 +41,61 @@ class TrainerBase:
                 self.early_stop = inf
 
         self.start_epoch = 0
-
-        self.checkpoint_dir = config.save_dir
+        if self.expert is not None:
+            self.checkpoint_dir = str(
+                config.save_dir) + f'/expert_{self.expert}'
+            if not os.path.exists(self.checkpoint_dir):
+                os.makedirs(self.checkpoint_dir)
+        else:
+            self.checkpoint_dir = str(config.save_dir)
+        self.last_checkpoint_path = None  # Track the last checkpoint file
 
         if config.resume is not None:
             self._resume_checkpoint(config.resume)
 
-    def _training_loop(self, epochs, epoch_trainer):
+    @abstractmethod
+    def _train_epoch(self, epoch):
+        """
+        Training logic for an epoch
+
+        :param epoch: Current epoch number
+        :return: A log that contains information about training
+        """
+        raise NotImplementedError
+
+    def _training_loop(self, epochs):
         """
         Full training logic
         """
         not_improved_count = 0
         for epoch in range(self.start_epoch, epochs):
-            result = epoch_trainer._train_epoch(epoch)
+            result = self._train_epoch(epoch)
 
             # save logged informations into log dict
+            self.logger.info('\n')
             log = {'epoch': epoch}
             log.update(result)
 
             # print logged informations to the screen
             for key, value in log.items():
-                self.logger.info('    {:15s}: {}'.format(str(key), value))
+                if isinstance(value, np.ndarray):
+                    value = value.tolist()
+                self.logger.info('    ' + f'{str(key)}: ' + f'{value}')
 
-            # evaluate model performance according to configured metric, save best checkpoint as model_best
+            # evaluate model performance according to configured metric,
+            # save best checkpoint as model_best
             best = False
             if self.mnt_mode != 'off':
                 try:
-                    # check whether model performance improved or not, according to specified metric(mnt_metric)
+                    # check whether model performance improved or not,
+                    # according to specified metric(mnt_metric)
                     improved = (self.mnt_mode == 'min' and log[self.mnt_metric] <= self.mnt_best) or \
                                (self.mnt_mode == 'max' and log[self.mnt_metric] >= self.mnt_best)
                 except KeyError:
                     self.logger.warning("Warning: Metric '{}' is not found. "
-                                        "Model performance monitoring is disabled.".format(self.mnt_metric))
+                                        "Model performance monitoring is "
+                                        "disabled.".format(
+                        self.mnt_metric))
                     self.mnt_mode = 'off'
                     improved = False
 
@@ -76,20 +107,21 @@ class TrainerBase:
                     not_improved_count += 1
 
                 if not_improved_count > self.early_stop:
-                    self.logger.info("Validation performance didn\'t improve for {} epochs. "
-                                     "Training stops.".format(self.early_stop))
+                    self.logger.info(
+                        "Validation performance didn\'t improve for {} epochs. "
+                        "Training stops.".format(self.early_stop))
                     break
 
-            if epoch % self.save_period == 0:
-                self._save_checkpoint(epoch, save_best=best)
+                if (epoch % self.save_period == 0 or best) and (self.mnt_mode != 'off'):
+                    self._save_checkpoint(epoch, save_best=best)
 
     def _save_checkpoint(self, epoch, save_best=False):
         """
         Saving checkpoints
 
         :param epoch: current epoch number
-        :param log: logging information of the epoch
-        :param save_best: if True, rename the saved checkpoint to 'model_best.pth'
+        :param save_best: if True, rename the saved checkpoint to
+        'model_best.pth'
         """
         arch = type(self.model).__name__
         state = {
@@ -100,13 +132,30 @@ class TrainerBase:
             'monitor_best': self.mnt_best,
             'config': self.config
         }
-        filename = str(self.checkpoint_dir / 'checkpoint-epoch{}.pth'.format(epoch))
+        if hasattr(self.arch, "selector"):
+            state['selector'] = self.arch.selector.state_dict()
+
+        filename = self.checkpoint_dir + f'/checkpoint-epoch{epoch}.pth'
         torch.save(state, filename)
-        self.logger.info("Saving checkpoint: {} ...".format(filename))
+        self.logger.info(f"Saving checkpoint: {filename} ...")
+
+        # Delete the previous checkpoint if it exists
+        if self.last_checkpoint_path and os.path.exists(
+                self.last_checkpoint_path):
+            os.remove(self.last_checkpoint_path)
+            self.logger.info(
+                f"Deleted previous checkpoint: {self.last_checkpoint_path}")
+
+        # Update the last checkpoint path
+        self.last_checkpoint_path = filename
+
         if save_best:
-            best_path = str(self.checkpoint_dir / 'model_best.pth')
+            best_path = self.checkpoint_dir + '/model_best.pth'
             torch.save(state, best_path)
             self.logger.info("Saving current best: model_best.pth ...")
+            print(
+                f"Best model found at epoch: {epoch} with "
+                f"{self.mnt_metric}: {self.mnt_best}")
 
     def _resume_checkpoint(self, resume_path):
         """
@@ -122,15 +171,24 @@ class TrainerBase:
 
         # load architecture params from checkpoint.
         if checkpoint['config']['arch'] != self.config['arch']:
-            self.logger.warning("Warning: Architecture configuration given in config file is different from that of "
-                                "checkpoint. This may yield an exception while state_dict is being loaded.")
+            self.logger.warning(
+                "Warning: Architecture configuration given in config file is "
+                "different from that of "
+                "checkpoint. This may yield an exception while state_dict is "
+                "being loaded.")
         self.model.load_state_dict(checkpoint['state_dict'])
 
-        # load optimizer state from checkpoint only when optimizer type is not changed.
-        if checkpoint['config']['optimizer']['type'] != self.config['optimizer']['type']:
-            self.logger.warning("Warning: Optimizer type given in config file is different from that of checkpoint. "
-                                "Optimizer parameters not being resumed.")
+        # load optimizer state from checkpoint only when optimizer type is
+        # not changed.
+        if checkpoint['config']['optimizer']['type'] != \
+                self.config['optimizer']['type']:
+            self.logger.warning(
+                "Warning: Optimizer type given in config file is different "
+                "from that of checkpoint. "
+                "Optimizer parameters not being resumed.")
         else:
             self.optimizer.load_state_dict(checkpoint['optimizer'])
 
-        self.logger.info("Checkpoint loaded. Resume training from epoch {}".format(self.start_epoch))
+        self.logger.info(
+            "Checkpoint loaded. Resume training from epoch {}".format(
+                self.start_epoch))

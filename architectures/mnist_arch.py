@@ -8,9 +8,15 @@ from model.loss import SelectiveNetLoss, CELoss
 
 
 class MNISTCBMTreeArchitecture:
-    def __init__(self, config):
+    def __init__(self, config, hard_concepts=None):
 
-        self.concept_predictor = ConceptPredictor()
+        if hard_concepts is None:
+            self.hard_concepts = []
+        else:
+            self.hard_concepts = hard_concepts
+
+        concept_size = config["dataset"]["num_concepts"] - len(self.hard_concepts)
+        self.concept_predictor = ConceptPredictor(concept_size)
         self.sr_model = SurrogateNetwork(
             input_dim=config["dataset"]["train_size"] * config["dataset"]["num_classes"]
         )
@@ -31,32 +37,60 @@ class MNISTCBMTreeArchitecture:
         self.optimizer_mn = torch.optim.Adam(self.mn_model.parameters(), lr=0.001)
 
 class MNISTCBMArchitecture:
-    def __init__(self, config):
+    def __init__(self, config, hard_concepts=None):
 
-        self.concept_predictor = ConceptPredictor()
+        if hard_concepts is None:
+            self.hard_concepts = []
+        else:
+            self.hard_concepts = hard_concepts
+
+        concept_size = config["dataset"]["num_concepts"] - len(self.hard_concepts)
+        self.concept_predictor = ConceptPredictor(concept_size)
         self.label_predictor = LabelPredictor(concept_size=config["dataset"]["num_concepts"],
                                               num_classes=config["dataset"]["num_classes"])
         self.model = MainNetwork(self.concept_predictor, self.label_predictor)
 
         # Define loss functions and optimizers
         self.criterion_concept = nn.BCELoss(reduction='none')  # BCE Loss for binary concepts
+        #self.concept_weights = torch.ones(config["dataset"]["num_concepts"])
         self.criterion_label = CELoss()
 
-        # only apply regularisation (if any) to the label predictor,
-        # for a fair comparison with Tree Regularisation
-        params_to_update = [
-            {'params': self.model.concept_predictor.parameters(), 'weight_decay': 0},
-            {'params': self.model.label_predictor.parameters(), 'weight_decay': config["model"]['weight_decay']},
-        ]
+        if "weight_decay" not in config["model"]:
+            xc_params_to_update = [
+                {'params': self.model.concept_predictor.parameters(), 'weight_decay': config["model"]['xc_weight_decay']},
+            ]
+            self.xc_optimizer = torch.optim.Adam(xc_params_to_update, lr=config["model"]['xc_lr'])
+            cy_params_to_update = [
+                {'params': self.model.label_predictor.parameters(), 'weight_decay': config["model"]['cy_weight_decay']},
+            ]
+            self.cy_optimizer = torch.optim.Adam(cy_params_to_update, lr=config["model"]['cy_lr'])
+        else:
+            # only apply regularisation (if any) to the label predictor,
+            # for a fair comparison with Tree Regularisation
+            params_to_update = [
+                {'params': self.model.concept_predictor.parameters(),
+                 'weight_decay': 0},
+                {'params': self.model.label_predictor.parameters(),
+                 'weight_decay': config["model"]['weight_decay']},
+            ]
+            self.optimizer = torch.optim.Adam(params_to_update,
+                                              lr=config["model"]['lr'])
 
-        self.optimizer = torch.optim.Adam(params_to_update,
-                                          lr=config["model"]['lr'])
+    def scale_concept_weights(self, feature_importances):
+        # scale the concept weights by the inverse of the feature importances
+        self.concept_weights = torch.tensor(1 / (np.array(feature_importances) + 0.1))
+        # self.concept_weights = torch.tensor((np.array(feature_importances) * 10))
 
 class MNISTCBMSelectiveNetArchitecture:
-    def __init__(self, config):
+    def __init__(self, config, hard_concepts=None):
 
-        # define the main network
-        self.concept_predictor = ConceptPredictor()
+        if hard_concepts is None:
+            self.hard_concepts = []
+        else:
+            self.hard_concepts = hard_concepts
+
+        concept_size = config["dataset"]["num_concepts"] - len(self.hard_concepts)
+        self.concept_predictor = ConceptPredictor(concept_size)
         self.label_predictor = LabelPredictor(concept_size=config["dataset"]["num_concepts"],
                                               num_classes=config["dataset"]["num_classes"])
         self.model = MainNetwork(self.concept_predictor, self.label_predictor)
@@ -74,6 +108,7 @@ class MNISTCBMSelectiveNetArchitecture:
 
         # Define loss functions and optimizers
         self.criterion_concept = nn.BCELoss(reduction='none')  # BCE Loss for binary concepts
+        #self.concept_weights = torch.ones(config["dataset"]["num_concepts"])
         CE = nn.CrossEntropyLoss(reduction='none')
         self.criterion_label = SelectiveNetLoss(
             iteration=1, CE=CE,
@@ -83,17 +118,28 @@ class MNISTCBMSelectiveNetArchitecture:
             alpha=config["selectivenet"]["alpha"]
         )
 
-        # only apply regularisation (if any) to the label predictor,
-        # for a fair comparison with Tree Regularisation
-        params_to_update = [
-            {'params': self.model.concept_predictor.parameters(), 'weight_decay': 0},
-            {'params': self.model.label_predictor.parameters(), 'weight_decay': config["model"]['weight_decay']},
-            {'params': self.selector.parameters(), 'weight_decay': config["model"]['weight_decay']},
-            {'params': self.aux_model.parameters(), 'weight_decay': config["model"]['weight_decay']},
-        ]
-
-        self.optimizer = torch.optim.Adam(params_to_update,
-                                          lr=config["model"]['lr'])
+        if "weight_decay" not in config["model"]:
+            xc_params_to_update = [
+                {'params': self.model.concept_predictor.parameters(), 'weight_decay': config["model"]['xc_weight_decay']},
+            ]
+            self.xc_optimizer = torch.optim.Adam(xc_params_to_update, lr=config["model"]['xc_lr'])
+            cy_params_to_update = [
+                {'params': self.model.label_predictor.parameters(), 'weight_decay': config["model"]['cy_weight_decay']},
+                {'params': self.selector.parameters(), 'weight_decay': config["model"]['cy_weight_decay']},
+                {'params': self.aux_model.parameters(), 'weight_decay': config["model"]['cy_weight_decay']},
+            ]
+            self.cy_optimizer = torch.optim.Adam(cy_params_to_update, lr=config["model"]['cy_lr'])
+        else:
+            # only apply regularisation (if any) to the label predictor,
+            # for a fair comparison with Tree Regularisation
+            params_to_update = [
+                {'params': self.model.concept_predictor.parameters(), 'weight_decay': 0},
+                {'params': self.model.label_predictor.parameters(), 'weight_decay': config["model"]['weight_decay']},
+                {'params': self.selector.parameters(), 'weight_decay': config["model"]['weight_decay']},
+                {'params': self.aux_model.parameters(), 'weight_decay': config["model"]['weight_decay']},
+            ]
+            self.optimizer = torch.optim.Adam(params_to_update,
+                                              lr=config["model"]['lr'])
 
 class MNISTCYArchitecture:
     def __init__(self, config):
@@ -109,11 +155,11 @@ class MNISTCYArchitecture:
 
 # Define the models
 class ConceptPredictor(nn.Module):
-    def __init__(self):
+    def __init__(self, num_concepts):
         super(ConceptPredictor, self).__init__()
         self.fc1 = nn.Linear(28 * 28, 512)
         self.fc2 = nn.Linear(512, 256)
-        self.fc3 = nn.Linear(256, 12)  # 6 binary outputs
+        self.fc3 = nn.Linear(256, num_concepts)
 
     def forward(self, x):
         x = x.view(-1, 28 * 28)

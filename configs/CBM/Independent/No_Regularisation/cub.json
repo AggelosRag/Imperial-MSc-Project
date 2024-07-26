@@ -1,5 +1,5 @@
 {
-    "name": "cbm_cub_joint",
+    "name": "cbm_cub_independent",
     "n_gpu": 1,
 
     "arch": {
@@ -7,9 +7,10 @@
         "args": {}
     },
     "model": {
-        "lr": 0.001,
-        "weight_decay": 0,
-        "alpha": 1
+        "xc_lr": 0.01,
+        "xc_weight_decay": 0,
+        "cy_lr": 0.001,
+        "cy_weight_decay": 0
     },
     "dataset": {
         "num_classes": 200,
@@ -221,23 +222,24 @@
     "data_loader": {
         "type": "get_cub_dataLoader",
         "args":{
-            "batch_size": 206
+            "batch_size": 64
         }
     },
     "trainer": {
-        "type": "JointCBMTrainer",
+        "type": "IndependentCBMTrainer",
         "args": {},
-        "epochs": 2500,
+        "xc_epochs": 300,
+        "cy_epochs": 100,
         "save_dir": "saved/",
-        "save_period": 1000,
+        "save_period": 20,
         "verbosity": 2,
-        "monitor": "off",
-        "early_stop": 10,
+        "monitor": "min val_loss",
+        "early_stop": 0,
         "tensorboard": true
     },
     "regularisation": {
         "type": "L2",
-        "min_samples_leaf": 150,
+        "min_samples_leaf": 1,
         "snapshot_epochs": 50
     }
 }

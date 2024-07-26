@@ -161,6 +161,18 @@ class CUBDataset(Dataset):
         else:
             return img, class_label
 
+    def get_all_data_in_tensors(self, batch_size, shuffle):
+        all_C = []
+        all_y = []
+        for i in self.data:
+            all_C.append(i["attribute_label"])
+            all_y.append(i["class_label"])
+        all_C = torch.tensor(all_C).float()
+        all_y = torch.tensor(all_y).long()
+        all_data = TensorDataset(all_C, all_y)
+        dataloader = DataLoader(all_data, batch_size=batch_size, shuffle=shuffle)
+        return dataloader
+
 class ImbalancedDatasetSampler(torch.utils.data.sampler.Sampler):
     """Samples elements randomly from a given list of indices for imbalanced dataset
     Arguments:

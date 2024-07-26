@@ -19,6 +19,11 @@ class CUBCBMArchitecture:
                                               num_classes=config["dataset"]["num_classes"])
         self.model = MainNetwork(self.concept_predictor, self.label_predictor)
 
+        if "pretrained_concept_predictor" in config["model"]:
+            state_dict = torch.load(config["model"]["pretrained_concept_predictor"])["state_dict"]
+            self.model.load_state_dict(state_dict)
+            print("Loaded pretrained concept predictor from ", config["model"]["pretrained_concept_predictor"])
+
         # Define loss functions and optimizers
         self.criterion_concept = nn.BCEWithLogitsLoss(reduction='none')  # BCE Loss for binary concepts
         #self.concept_weights = torch.ones(config["dataset"]["num_concepts"])
@@ -29,6 +34,8 @@ class CUBCBMArchitecture:
                 {'params': self.model.concept_predictor.parameters(), 'weight_decay': config["model"]['xc_weight_decay']},
             ]
             self.xc_optimizer = torch.optim.Adam(xc_params_to_update, lr=config["model"]['xc_lr'])
+            if "pretrained_concept_predictor" in config["model"]:
+                self.xc_optimizer.load_state_dict(torch.load(config["model"]["pretrained_concept_predictor"])["optimizer"])
             cy_params_to_update = [
                 {'params': self.model.label_predictor.parameters(), 'weight_decay': config["model"]['cy_weight_decay']},
             ]
@@ -44,6 +51,8 @@ class CUBCBMArchitecture:
             ]
             self.optimizer = torch.optim.Adam(params_to_update,
                                               lr=config["model"]['lr'])
+            if "pretrained_concept_predictor" in config["model"]:
+                self.optimizer.load_state_dict(torch.load(config["model"]["pretrained_concept_predictor"])["optimizer"])
 
 
 class MainNetwork(nn.Module):

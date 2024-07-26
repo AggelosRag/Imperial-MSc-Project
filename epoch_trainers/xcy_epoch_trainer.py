@@ -30,15 +30,15 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
         self.val_loader = valid_data_loader
         self.lr_scheduler = lr_scheduler
         self.arch = arch
-        self.model = arch.model
+        self.model = arch.model.to(self.device)
         self.alpha = config['model']['alpha']
         self.criterion_concept = arch.criterion_concept
         self.criterion_label = arch.criterion_label
-        self.optimizer = arch.optimizer
         self.num_concepts = config['dataset']['num_concepts']
         self.min_samples_leaf = config['regularisation']['min_samples_leaf']
         self.epochs = config['trainer']['epochs']
         self.iteration = iteration
+        print("Device: ", self.device)
 
         self.do_validation = self.val_loader is not None
         self.cbm_mode = cbm_mode
@@ -73,6 +73,13 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
         else:
             self.selective_net = False
 
+        self.optimizer = arch.optimizer
+        for state in self.optimizer.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(self.device)
+
+
 
     def _train_epoch(self, epoch):
 
@@ -84,6 +91,9 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
         if self.selective_net:
             self.arch.selector.train()
             self.arch.aux_model.train()
+
+        tensor_C_pred= torch.FloatTensor().to(self.device)
+        tensor_y_pred = torch.FloatTensor().to(self.device)
 
         with tqdm(total=len(self.train_loader), file=sys.stdout) as t:
             for batch_idx, (X_batch, C_batch, y_batch) in enumerate(self.train_loader):
@@ -100,7 +110,9 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                 C_pred_soft = self.model.concept_predictor(X_batch)
                 C_pred_concat = torch.cat((C_hard, C_pred_soft), dim=1)
                 C_pred = C_pred_concat[:, self.sorted_concept_indices]
+                tensor_C_pred = torch.cat((tensor_C_pred, C_pred), dim=0)
                 y_pred = self.model.label_predictor(C_pred)
+                tensor_y_pred = torch.cat((tensor_y_pred, y_pred), dim=0)
                 outputs = {"prediction_out": y_pred}
 
                 if self.selective_net:
@@ -114,11 +126,11 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                     bce_loss_per_concept = torch.mean(loss_concept, dim=0)
                     loss_concept_total = bce_loss_per_concept.sum()
                     self.metrics_tracker.update_batch(update_dict_or_key='concept_loss',
-                                                      value=loss_concept_total.detach().item(),
+                                                      value=loss_concept_total.detach().cpu().item(),
                                                       batch_size=batch_size,
                                                       mode='train')
                     self.metrics_tracker.update_batch(update_dict_or_key='loss_per_concept',
-                                                      value=list(bce_loss_per_concept.detach().numpy()),
+                                                      value=list(bce_loss_per_concept.detach().cpu().numpy()),
                                                       batch_size=batch_size,
                                                       mode='train')
 
@@ -138,19 +150,19 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                 # We still need the complete dataset to compute the APL
                 # In full-batch GD, X_batch = X and X_rest = None
                 if (batch_idx == len(self.train_loader) - 1):
-                    X_all = self.train_loader.dataset[:][0].to(self.device)
-                    C_all = self.train_loader.dataset[:][1].to(self.device)
-                    C_hard_all = C_all[:, self.hard_concepts].to(self.device)
-
-                    with torch.no_grad():
-                        C_pred_soft_all = self.model.concept_predictor(X_all)
-                        C_pred_concat = torch.cat((C_hard_all, C_pred_soft_all), dim=1)
-                        C_pred = C_pred_concat[:, self.sorted_concept_indices]
-                        y_pred = self.model.label_predictor(C_pred)
+                    # X_all = self.train_loader.dataset[:][0].to(self.device)
+                    # C_all = self.train_loader.dataset[:][1].to(self.device)
+                    # C_hard_all = C_all[:, self.hard_concepts].to(self.device)
+                    #
+                    # with torch.no_grad():
+                    #     C_pred_soft_all = self.model.concept_predictor(X_all)
+                    #     C_pred_concat = torch.cat((C_hard_all, C_pred_soft_all), dim=1)
+                    #     C_pred = C_pred_concat[:, self.sorted_concept_indices]
+                    #     y_pred = self.model.label_predictor(C_pred)
 
                     # Calculate the APL
                     APL, fid, fi, tree = self._calculate_APL(self.min_samples_leaf,
-                                                             C_pred, y_pred)
+                                                             tensor_C_pred, tensor_y_pred)
                     self.metrics_tracker.update_batch(update_dict_or_key='APL',
                                                       value=APL,
                                                       batch_size=len(self.train_loader.dataset),
@@ -188,7 +200,7 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                 loss.backward()
                 self.optimizer.step()
                 self.metrics_tracker.update_batch(update_dict_or_key='loss',
-                                                  value=loss.detach().item(),
+                                                  value=loss.detach().cpu().item(),
                                                   batch_size=batch_size,
                                                   mode='train')
 
@@ -218,6 +230,9 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
             self.arch.selector.eval()
             self.arch.aux_model.eval()
 
+        tensor_C_pred = torch.FloatTensor().to(self.device)
+        tensor_y_pred = torch.FloatTensor().to(self.device)
+
         with torch.no_grad():
             with tqdm(total=len(self.val_loader), file=sys.stdout) as t:
                 for batch_idx, (X_batch, C_batch, y_batch) in enumerate(self.val_loader):
@@ -234,7 +249,9 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                     C_pred_soft = self.model.concept_predictor(X_batch)
                     C_pred_concat = torch.cat((C_hard, C_pred_soft), dim=1)
                     C_pred = C_pred_concat[:, self.sorted_concept_indices]
+                    tensor_C_pred = torch.cat((tensor_C_pred, C_pred), dim=0)
                     y_pred = self.model.label_predictor(C_pred)
+                    tensor_y_pred = torch.cat((tensor_y_pred, y_pred), dim=0)
                     outputs = {"prediction_out": y_pred}
 
                     if self.selective_net:
@@ -269,12 +286,12 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                         loss_concept_total = bce_loss_per_concept.sum()
                         self.metrics_tracker.update_batch(
                             update_dict_or_key='concept_loss',
-                            value=loss_concept_total.detach().item(),
+                            value=loss_concept_total.detach().cpu().item(),
                             batch_size=batch_size,
                             mode='val')
                         self.metrics_tracker.update_batch(
                             update_dict_or_key='loss_per_concept',
-                            value=list(bce_loss_per_concept.detach().numpy()),
+                            value=list(bce_loss_per_concept.detach().cpu().numpy()),
                             batch_size=batch_size,
                             mode='val')
 
@@ -294,19 +311,19 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                     # We still need the complete dataset to compute the APL
                     # In full-batch GD, X_batch = X and X_rest = None
                     if (batch_idx == len(self.val_loader) - 1):
-                        X_all = self.val_loader.dataset[:][0].to(self.device)
-                        C_all = self.val_loader.dataset[:][1].to(self.device)
-                        C_hard_all = C_all[:, self.hard_concepts].to(self.device)
-
-                        with torch.no_grad():
-                            C_pred_soft_all = self.model.concept_predictor(X_all)
-                            C_pred_concat = torch.cat((C_hard_all, C_pred_soft_all),dim=1)
-                            C_pred = C_pred_concat[:, self.sorted_concept_indices]
-                            y_pred = self.model.label_predictor(C_pred)
+                        # X_all = self.val_loader.dataset[:][0].to(self.device)
+                        # C_all = self.val_loader.dataset[:][1].to(self.device)
+                        # C_hard_all = C_all[:, self.hard_concepts].to(self.device)
+                        #
+                        # with torch.no_grad():
+                        #     C_pred_soft_all = self.model.concept_predictor(X_all)
+                        #     C_pred_concat = torch.cat((C_hard_all, C_pred_soft_all),dim=1)
+                        #     C_pred = C_pred_concat[:, self.sorted_concept_indices]
+                        #     y_pred = self.model.label_predictor(C_pred)
 
                         # Calculate the APL
                         APL, fid, fi, tree = self._calculate_APL(
-                            self.min_samples_leaf, C_pred, y_pred)
+                            self.min_samples_leaf, tensor_C_pred, tensor_y_pred)
                         self.metrics_tracker.update_batch(update_dict_or_key='APL',
                                                           value=APL,
                                                           batch_size=len(self.val_loader.dataset),
@@ -341,7 +358,7 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                     else:
                         loss = loss_label["target_loss"]
                     self.metrics_tracker.update_batch(update_dict_or_key='loss',
-                                                      value=loss.detach().item(),
+                                                      value=loss.detach().cpu().item(),
                                                       batch_size=batch_size,
                                                       mode='val')
 

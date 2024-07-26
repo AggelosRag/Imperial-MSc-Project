@@ -26,13 +26,11 @@ class XC_Epoch_Trainer(EpochTrainerBase):
         self.val_loader = valid_data_loader
         self.lr_scheduler = lr_scheduler
         self.arch = arch
-        self.model = arch.model
+        self.model = arch.model.to(self.device)
         self.criterion = arch.criterion_concept
-        self.optimizer = arch.xc_optimizer
         self.min_samples_leaf = config['regularisation']['min_samples_leaf']
 
         self.do_validation = self.val_loader is not None
-        self.log_step = int(np.sqrt(data_loader.batch_size))
 
         # Initialize the metrics tracker
         self.metrics_tracker = XCLogger(config, iteration=1,
@@ -42,6 +40,13 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                                        val_loader=self.val_loader,
                                        device=self.device)
         self.metrics_tracker.begin_run()
+        print("Device: ", self.device)
+
+        self.optimizer = arch.xc_optimizer
+        for state in self.optimizer.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(self.device)
 
 
     def _train_epoch(self, epoch):
@@ -64,11 +69,11 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                 bce_loss_per_concept = torch.mean(loss_concept, dim=0)
                 loss_concept_total = bce_loss_per_concept.sum()
                 self.metrics_tracker.update_batch(update_dict_or_key='concept_loss',
-                                                  value=loss_concept_total.detach().item(),
+                                                  value=loss_concept_total.detach().cpu().item(),
                                                   batch_size=batch_size,
                                                   mode='train')
                 self.metrics_tracker.update_batch(update_dict_or_key='loss_per_concept',
-                                                  value=list(bce_loss_per_concept.detach().numpy()),
+                                                  value=list(bce_loss_per_concept.detach().cpu().numpy()),
                                                   batch_size=batch_size,
                                                   mode='train')
 
@@ -81,7 +86,7 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                 loss_concept_total.backward()
                 self.optimizer.step()
                 self.metrics_tracker.update_batch(update_dict_or_key='loss',
-                                                  value=loss_concept_total.detach().item(),
+                                                  value=loss_concept_total.detach().cpu().item(),
                                                   batch_size=batch_size,
                                                   mode='train')
 
@@ -123,12 +128,12 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                     loss_concept_total = bce_loss_per_concept.sum()
                     self.metrics_tracker.update_batch(
                         update_dict_or_key='concept_loss',
-                        value=loss_concept_total.detach().item(),
+                        value=loss_concept_total.detach().cpu().item(),
                         batch_size=batch_size,
                         mode='val')
                     self.metrics_tracker.update_batch(
                         update_dict_or_key='loss_per_concept',
-                        value=list(bce_loss_per_concept.detach().numpy()),
+                        value=list(bce_loss_per_concept.detach().cpu().numpy()),
                         batch_size=batch_size,
                         mode='val')
 
@@ -138,7 +143,7 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                     # )
 
                     self.metrics_tracker.update_batch(update_dict_or_key='loss',
-                                                      value=loss_concept_total.detach().item(),
+                                                      value=loss_concept_total.detach().cpu().item(),
                                                       batch_size=batch_size,
                                                       mode='val')
 

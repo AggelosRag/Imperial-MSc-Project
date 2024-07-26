@@ -32,14 +32,12 @@ class CY_Epoch_Trainer(EpochTrainerBase):
         self.val_loader = valid_data_loader
         self.lr_scheduler = lr_scheduler
         self.arch = arch
-        self.model = arch.model
+        self.model = arch.model.to(self.device)
         self.criterion = arch.criterion_label
-        self.optimizer = arch.cy_optimizer
         self.min_samples_leaf = config['regularisation']['min_samples_leaf']
         self.epochs = config['trainer']['cy_epochs']
 
         self.do_validation = self.val_loader is not None
-        self.log_step = int(np.sqrt(data_loader.batch_size))
 
         self.metrics_tracker = CYLogger(config, expert=expert,
                                       tb_path=str(self.config.log_dir),
@@ -48,12 +46,19 @@ class CY_Epoch_Trainer(EpochTrainerBase):
                                       val_loader=self.val_loader,
                                       device=self.device)
         self.metrics_tracker.begin_run()
+        print("Device: ", self.device)
 
         # check if selective net is used
         if "selectivenet" in config.config.keys():
             self.selective_net = True
         else:
             self.selective_net = False
+
+        self.optimizer = arch.cy_optimizer
+        for state in self.optimizer.state.values():
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(self.device)
 
     def _train_epoch(self, epoch):
 
@@ -64,14 +69,19 @@ class CY_Epoch_Trainer(EpochTrainerBase):
             self.arch.selector.train()
             self.arch.aux_model.train()
 
+        tensor_C = torch.FloatTensor().to(self.device)
+        tensor_y_pred = torch.FloatTensor().to(self.device)
+
         with tqdm(total=len(self.train_loader), file=sys.stdout) as t:
-            for batch_idx, (X_batch, C_batch, y_batch) in enumerate(self.train_loader):
-                batch_size = X_batch.size(0)
+            for batch_idx, (C_batch, y_batch) in enumerate(self.train_loader):
+                batch_size = C_batch.size(0)
                 C_batch = C_batch.to(self.device)
+                tensor_C = torch.cat((tensor_C, C_batch), dim=0)
                 y_batch = y_batch.to(self.device)
 
                 # Forward pass
                 y_pred = self.model.label_predictor(C_batch)
+                tensor_y_pred = torch.cat((tensor_y_pred, y_pred), dim=0)
                 outputs = {"prediction_out": y_pred}
 
                 if self.selective_net:
@@ -95,14 +105,10 @@ class CY_Epoch_Trainer(EpochTrainerBase):
                 # We still need the complete dataset to compute the APL
                 # In full-batch GD, X_batch = X and X_rest = None
                 if (batch_idx == len(self.train_loader) - 1):
-                    C_batch = self.train_loader.dataset[:][1].to(self.device)
-
-                    with torch.no_grad():
-                        y_pred = self.model.label_predictor(C_batch)
 
                     # Calculate the APL
                     APL, fid, fi, tree = self._calculate_APL(self.min_samples_leaf,
-                                                             C_batch, y_pred)
+                                                             tensor_C, tensor_y_pred)
                     self.metrics_tracker.update_batch(update_dict_or_key='APL',
                                                       value=APL,
                                                       batch_size=len(self.train_loader.dataset),
@@ -122,12 +128,16 @@ class CY_Epoch_Trainer(EpochTrainerBase):
                     #     self._visualize_tree(tree, self.config, epoch, APL, 'None',
                     #                          'None', mode='train')
 
+                    # visualize last tree
+                    self._visualize_tree(tree, self.config, epoch, APL, 'None',
+                                         'None', mode='train')
+
                 loss = loss_label["target_loss"]
                 self.optimizer.zero_grad()
                 loss.backward()
                 self.optimizer.step()
                 self.metrics_tracker.update_batch(update_dict_or_key='loss',
-                                                  value=loss.detach().item(),
+                                                  value=loss.detach().cpu().item(),
                                                   batch_size=batch_size,
                                                   mode='train')
 
@@ -156,15 +166,20 @@ class CY_Epoch_Trainer(EpochTrainerBase):
             self.arch.selector.eval()
             self.arch.aux_model.eval()
 
+        tensor_C = torch.FloatTensor().to(self.device)
+        tensor_y_pred = torch.FloatTensor().to(self.device)
+
         with torch.no_grad():
             with tqdm(total=len(self.val_loader), file=sys.stdout) as t:
-                for batch_idx, (X_batch, C_batch, y_batch) in enumerate(self.val_loader):
-                    batch_size = X_batch.size(0)
+                for batch_idx, (C_batch, y_batch) in enumerate(self.val_loader):
+                    batch_size = C_batch.size(0)
                     C_batch = C_batch.to(self.device)
+                    tensor_C = torch.cat((tensor_C, C_batch), dim=0)
                     y_batch = y_batch.to(self.device)
 
                     # Forward pass
                     y_pred = self.model.label_predictor(C_batch)
+                    tensor_y_pred = torch.cat((tensor_y_pred, y_pred), dim=0)
                     outputs = {"prediction_out": y_pred}
 
                     if self.selective_net:
@@ -208,12 +223,10 @@ class CY_Epoch_Trainer(EpochTrainerBase):
                     # We still need the complete dataset to compute the APL
                     # In full-batch GD, X_batch = X and X_rest = None
                     if (batch_idx == len(self.val_loader) - 1):
-                        C_batch = self.val_loader.dataset[:][1].to(self.device)
-                        y_pred = self.model.label_predictor(C_batch)
 
                         # Calculate the APL
                         APL, fid, fi, tree = self._calculate_APL(
-                            self.min_samples_leaf, C_batch, y_pred)
+                            self.min_samples_leaf, tensor_C, tensor_y_pred)
                         self.metrics_tracker.update_batch(update_dict_or_key='APL',
                                                           value=APL,
                                                           batch_size=len(self.val_loader.dataset),
@@ -234,9 +247,12 @@ class CY_Epoch_Trainer(EpochTrainerBase):
                         #     self._visualize_tree(tree, self.config, epoch, APL, 'None',
                         #                          'None', mode='val')
 
+                        self._visualize_tree(tree, self.config, epoch, APL, 'None',
+                                             'None', mode='val')
+
                     loss = loss_label["target_loss"]
                     self.metrics_tracker.update_batch(update_dict_or_key='loss',
-                                                      value=loss.detach().item(),
+                                                      value=loss.detach().cpu().item(),
                                                       batch_size=batch_size,
                                                       mode='val')
                     t.set_postfix(

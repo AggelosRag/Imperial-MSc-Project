@@ -28,25 +28,30 @@ class IndependentCBMTrainer:
             self.device, self.data_loader,
             self.valid_data_loader)
 
+        # create a new dataloader for the c->y model
+        train_data_loader = self.data_loader.dataset.get_all_data_in_tensors(
+            batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=True
+        )
+        val_data_loader = self.valid_data_loader.dataset.get_all_data_in_tensors(
+            batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=False
+        )
         # define the c->y model
         self.reg = reg
         if reg == 'Tree':
             self.cy_epoch_trainer = CY_Epoch_Tree_Trainer(
                 self.arch, self.config,
-                self.device, self.data_loader,
-                self.valid_data_loader)
+                self.device, train_data_loader,
+                val_data_loader)
         else:
             self.cy_epoch_trainer = CY_Epoch_Trainer(
                 self.arch, self.config,
-                self.device, self.data_loader,
-                self.valid_data_loader, expert=self.expert)
-
+                self.device, train_data_loader,
+                val_data_loader, expert=self.expert)
 
     def train(self):
 
         logger = self.config.get_logger('train')
-
-        if self.expert == 1:
+        if self.expert == 1 or "pretrained_concept_predictor" not in self.config["model"]:
             # train the x->c model
             print("\nTraining x->c")
             logger.info("Training x->c")
@@ -58,6 +63,14 @@ class IndependentCBMTrainer:
         logger.info("Training c->y")
         self.cy_epoch_trainer._training_loop(self.cy_epochs)
         self.plot_cy()
+
+    def test(self):
+
+        logger = self.config.get_logger('test')
+        # get x->c predictions
+        predictions = self.xc_epoch_trainer._test_epoch()
+        # get c->y predictions
+        self.cy_epoch_trainer._test_epoch(predictions)
 
     def plot_xc(self):
         results_trainer = self.xc_epoch_trainer.metrics_tracker.result()

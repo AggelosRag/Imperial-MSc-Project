@@ -25,7 +25,7 @@
         "type": "get_mnist_dataLoader",
         "args":{
             "data_dir": "./datasets/MNIST",
-            "type": "Two-Batch",
+            "type": "SGD",
             "batch_size": 206
         }
     },

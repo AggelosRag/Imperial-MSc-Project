@@ -1,7 +1,6 @@
 import os
 from io import StringIO
 import seaborn as sns
-import cairosvg
 
 import numpy as np
 import pydotplus
@@ -42,8 +41,8 @@ class EpochTrainerBase(TrainerBase):
     def _calculate_APL(self, min_samples_leaf, C_pred, outputs):
 
         tree = DecisionTreeClassifier(min_samples_leaf=min_samples_leaf)
-        C_pred = C_pred.detach().numpy()
-        outputs = outputs.detach().numpy()
+        C_pred = C_pred.detach().cpu().numpy()
+        outputs = outputs.detach().cpu().numpy()
 
         if outputs.shape[1] == 1:
             preds = np.where(outputs > 0.5, 1, 0).reshape(-1)
@@ -132,8 +131,8 @@ class EpochTrainerBase(TrainerBase):
                                      tree, mode, epoch, iteration=None):
         fixed_splits = tree_to_dict(tree)
 
-        C_pred = C_pred.detach().numpy()
-        outputs = outputs.detach().numpy()
+        C_pred = C_pred.detach().cpu().numpy()
+        outputs = outputs.detach().cpu().numpy()
 
         if outputs.shape[1] == 1:
             preds = np.where(outputs > 0.5, 1, 0).reshape(-1)
@@ -212,8 +211,8 @@ class EpochTrainerBase(TrainerBase):
     def _calculate_APL_gt(self, min_samples_leaf, C_pred, outputs):
 
         tree = DecisionTreeClassifier(min_samples_leaf=min_samples_leaf)
-        C_pred = C_pred.detach().numpy()
-        outputs = outputs.detach().numpy()
+        C_pred = C_pred.detach().cpu().numpy()
+        outputs = outputs.detach().cpu().numpy()
 
         self.reduced_class_names = [self.or_class_names[i] for i in self.class_mapping if i in outputs]
         self.reduced_colors = [self.or_colors[i] for i in self.class_mapping if i in outputs]

@@ -59,6 +59,15 @@ def main(config):
                               reg=reg)
 
     trainer.train()
+    print("\nTraining completed")
+    print("Starting testing ...")
+    logger.info("\n")
+    logger.info("Training completed")
+    logger.info("Starting testing ...")
+    trainer.test()
+    print("\nTesting completed")
+    logger.info("\n")
+    logger.info("Testing completed")
 
 
 if __name__ == '__main__':

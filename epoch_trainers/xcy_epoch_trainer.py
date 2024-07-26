@@ -33,6 +33,7 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
         self.model = arch.model.to(self.device)
         self.alpha = config['model']['alpha']
         self.criterion_concept = arch.criterion_concept
+        self.criterion_per_concept = arch.criterion_per_concept
         self.criterion_label = arch.criterion_label
         self.num_concepts = config['dataset']['num_concepts']
         self.min_samples_leaf = config['regularisation']['min_samples_leaf']
@@ -122,9 +123,9 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
 
                 # Calculate Concept losses
                 if self.cbm_mode == 'joint':
-                    loss_concept = self.criterion_concept(C_pred, C_batch)
-                    bce_loss_per_concept = torch.mean(loss_concept, dim=0)
-                    loss_concept_total = bce_loss_per_concept.sum()
+                    loss_concept_total = self.criterion_concept(C_pred, C_batch)
+                    bce_loss_per_concept = self.criterion_per_concept(C_pred, C_batch)
+                    bce_loss_per_concept = torch.mean(bce_loss_per_concept, dim=0)
                     self.metrics_tracker.update_batch(update_dict_or_key='concept_loss',
                                                       value=loss_concept_total.detach().cpu().item(),
                                                       batch_size=batch_size,
@@ -150,15 +151,6 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                 # We still need the complete dataset to compute the APL
                 # In full-batch GD, X_batch = X and X_rest = None
                 if (batch_idx == len(self.train_loader) - 1):
-                    # X_all = self.train_loader.dataset[:][0].to(self.device)
-                    # C_all = self.train_loader.dataset[:][1].to(self.device)
-                    # C_hard_all = C_all[:, self.hard_concepts].to(self.device)
-                    #
-                    # with torch.no_grad():
-                    #     C_pred_soft_all = self.model.concept_predictor(X_all)
-                    #     C_pred_concat = torch.cat((C_hard_all, C_pred_soft_all), dim=1)
-                    #     C_pred = C_pred_concat[:, self.sorted_concept_indices]
-                    #     y_pred = self.model.label_predictor(C_pred)
 
                     # Calculate the APL
                     APL, fid, fi, tree = self._calculate_APL(self.min_samples_leaf,
@@ -281,9 +273,9 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
 
                     # Calculate Concept losses
                     if self.cbm_mode == 'joint':
-                        loss_concept = self.criterion_concept(C_pred, C_batch)
-                        bce_loss_per_concept = torch.mean(loss_concept, dim=0)
-                        loss_concept_total = bce_loss_per_concept.sum()
+                        loss_concept_total = self.criterion_concept(C_pred, C_batch)
+                        bce_loss_per_concept = self.criterion_per_concept(C_pred, C_batch)
+                        bce_loss_per_concept = torch.mean(bce_loss_per_concept, dim=0)
                         self.metrics_tracker.update_batch(
                             update_dict_or_key='concept_loss',
                             value=loss_concept_total.detach().cpu().item(),
@@ -311,15 +303,6 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                     # We still need the complete dataset to compute the APL
                     # In full-batch GD, X_batch = X and X_rest = None
                     if (batch_idx == len(self.val_loader) - 1):
-                        # X_all = self.val_loader.dataset[:][0].to(self.device)
-                        # C_all = self.val_loader.dataset[:][1].to(self.device)
-                        # C_hard_all = C_all[:, self.hard_concepts].to(self.device)
-                        #
-                        # with torch.no_grad():
-                        #     C_pred_soft_all = self.model.concept_predictor(X_all)
-                        #     C_pred_concat = torch.cat((C_hard_all, C_pred_soft_all),dim=1)
-                        #     C_pred = C_pred_concat[:, self.sorted_concept_indices]
-                        #     y_pred = self.model.label_predictor(C_pred)
 
                         # Calculate the APL
                         APL, fid, fi, tree = self._calculate_APL(

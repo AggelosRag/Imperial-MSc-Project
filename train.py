@@ -20,20 +20,16 @@ def main(config):
 
     # setup data_loader instances
     dataloaders_module = importlib.import_module("data_loaders")
-    data_loader, valid_data_loader = config.init_obj('data_loader', dataloaders_module)
-    #valid_data_loader = data_loader.split_validation()
-
-    # build model architecture, then print to console
-    arch_module = importlib.import_module("architectures")
-    arch = config.init_obj('arch', arch_module, config)
-    logger.info("\n")
-    logger.info(arch.model)
+    data_loader, valid_data_loader, test_data_loader = config.init_obj('data_loader', dataloaders_module)
 
     # prepare for (multi-device) GPU training
     device, device_ids = prepare_device(config['n_gpu'])
-    model = arch.model.to(device)
-    if len(device_ids) > 1:
-        model = torch.nn.DataParallel(model, device_ids=device_ids)
+
+    # build model architecture, then print to console
+    arch_module = importlib.import_module("architectures")
+    arch = config.init_obj('arch', arch_module, config, device)
+    logger.info("\n")
+    logger.info(arch.model)
 
     if 'explainer' in config.config.keys():
         perform_leakage_visualization(data_loader, arch, config)

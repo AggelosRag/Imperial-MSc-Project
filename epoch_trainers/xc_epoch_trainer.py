@@ -27,6 +27,7 @@ class XC_Epoch_Trainer(EpochTrainerBase):
         self.lr_scheduler = lr_scheduler
         self.arch = arch
         self.model = arch.model.to(self.device)
+        self.criterion_per_concept = arch.criterion_per_concept
         self.criterion = arch.criterion_concept
         self.min_samples_leaf = config['regularisation']['min_samples_leaf']
 
@@ -65,9 +66,9 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                 C_pred = self.model.concept_predictor(X_batch)
 
                 # Calculate Concept losses
-                loss_concept = self.criterion(C_pred, C_batch)
-                bce_loss_per_concept = torch.mean(loss_concept, dim=0)
-                loss_concept_total = bce_loss_per_concept.sum()
+                loss_concept_total = self.criterion(C_pred, C_batch)
+                bce_loss_per_concept = self.criterion_per_concept(C_pred, C_batch)
+                bce_loss_per_concept = torch.mean(bce_loss_per_concept, dim=0)
                 self.metrics_tracker.update_batch(update_dict_or_key='concept_loss',
                                                   value=loss_concept_total.detach().cpu().item(),
                                                   batch_size=batch_size,
@@ -123,9 +124,9 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                     C_pred = self.model.concept_predictor(X_batch)
 
                     # Calculate Concept losses
-                    loss_concept = self.criterion(C_pred, C_batch)
-                    bce_loss_per_concept = torch.mean(loss_concept, dim=0)
-                    loss_concept_total = bce_loss_per_concept.sum()
+                    loss_concept_total = self.criterion(C_pred, C_batch)
+                    bce_loss_per_concept = self.criterion_per_concept(C_pred, C_batch)
+                    bce_loss_per_concept = torch.mean(bce_loss_per_concept, dim=0)
                     self.metrics_tracker.update_batch(
                         update_dict_or_key='concept_loss',
                         value=loss_concept_total.detach().cpu().item(),

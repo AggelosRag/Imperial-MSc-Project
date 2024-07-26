@@ -1,17 +1,28 @@
+import os
+from pathlib import Path
+
 from torch import nn
 import torch
 
+from data_loaders import find_class_imbalance
 from model.loss import SelectiveNetLoss, CELoss
 from networks.model_cub import get_model
 
 
 class CUBCBMArchitecture:
-    def __init__(self, config, hard_concepts=None):
+    def __init__(self, config, device, hard_concepts=None):
 
         if hard_concepts is None:
             self.hard_concepts = []
         else:
             self.hard_concepts = hard_concepts
+
+        train_data_path = Path("datasets/CUB/class_attr_data_10/train.pkl")
+        if "use_attribute_imbalance" in config["dataset"]:
+            if config["dataset"]["use_attribute_imbalance"]:
+                self.imbalance = torch.FloatTensor(find_class_imbalance(train_data_path, True)).to(device)
+        else:
+            self.imbalance = None
 
         concept_size = config["dataset"]["num_concepts"] - len(self.hard_concepts)
         self.concept_predictor, _, _ = get_model("/Users/gouse/PycharmProjects/AR-Imperial-Thesis/networks")
@@ -25,7 +36,8 @@ class CUBCBMArchitecture:
             print("Loaded pretrained concept predictor from ", config["model"]["pretrained_concept_predictor"])
 
         # Define loss functions and optimizers
-        self.criterion_concept = nn.BCEWithLogitsLoss(reduction='none')  # BCE Loss for binary concepts
+        self.criterion_concept = torch.nn.BCEWithLogitsLoss(weight=self.imbalance)
+        self.criterion_per_concept = nn.BCEWithLogitsLoss(reduction='none')  # BCE Loss for binary concepts
         #self.concept_weights = torch.ones(config["dataset"]["num_concepts"])
         self.criterion_label = CELoss()
 

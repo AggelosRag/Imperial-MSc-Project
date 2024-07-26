@@ -1,5 +1,6 @@
 import os
 import pickle
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -9,8 +10,8 @@ from base import TwoBatchTripletDataLoader, TwoBatchDataLoader
 from PIL import Image
 from torch.utils.data import BatchSampler
 
-CUB_PROCESSED_DIR = "/Users/gouse/PycharmProjects/AR-Imperial-Thesis/datasets/CUB/class_attr_data_10"
-CUB_DATA_DIR = "/Users/gouse/PycharmProjects/AR-Imperial-Thesis/datasets/CUB/CUB_200_2011"
+CUB_PROCESSED_DIR = Path("datasets/CUB/class_attr_data_10")
+CUB_DATA_DIR = Path("datasets/CUB/CUB_200_2011")
 N_ATTRIBUTES = 312
 
 def get_cub_dataLoader(data_dir='./datasets/parabola',
@@ -18,18 +19,25 @@ def get_cub_dataLoader(data_dir='./datasets/parabola',
                        batch_size=None):
 
     num_classes = 200
-    TRAIN_PKL = CUB_PROCESSED_DIR + "/train.pkl"
-    TEST_PKL = CUB_PROCESSED_DIR + "/test.pkl"
+    TRAIN_PKL = str(CUB_PROCESSED_DIR) + "/train.pkl"
+    VAL_PKL = str(CUB_PROCESSED_DIR) + "/val.pkl"
+    TEST_PKL = str(CUB_PROCESSED_DIR) + "/test.pkl"
     normalizer = transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[2, 2, 2])
     train_loader = load_cub_data([TRAIN_PKL], use_attr=True, no_img=False,
                                  batch_size=batch_size,
-                                 uncertain_label=False, image_dir=CUB_DATA_DIR,
+                                 uncertain_label=False, image_dir=str(CUB_DATA_DIR),
+                                 resol=224, normalizer=normalizer,
+                                 n_classes=num_classes, resampling=True)
+
+    val_loader = load_cub_data([VAL_PKL], use_attr=True, no_img=False,
+                                 batch_size=batch_size,
+                                 uncertain_label=False, image_dir=str(CUB_DATA_DIR),
                                  resol=224, normalizer=normalizer,
                                  n_classes=num_classes, resampling=True)
 
     test_loader = load_cub_data([TEST_PKL], use_attr=True, no_img=False,
                                 batch_size=batch_size,
-                                uncertain_label=False, image_dir=CUB_DATA_DIR,
+                                uncertain_label=False, image_dir=str(CUB_DATA_DIR),
                                 resol=224, normalizer=normalizer,
                                 n_classes=num_classes, resampling=True)
 
@@ -39,10 +47,11 @@ def get_cub_dataLoader(data_dir='./datasets/parabola',
     classes = [classes[i] for i in range(num_classes)]
     print(len(classes), "num classes for cub")
     print(len(train_loader.dataset), "training set size")
+    print(len(val_loader.dataset), "validation set size")
     print(len(test_loader.dataset), "test set size")
 
     # return train_loader, test_loader, idx_to_class, classes
-    return train_loader, test_loader
+    return train_loader, val_loader, test_loader
 
 def load_cub_data(pkl_paths, use_attr, no_img, batch_size,
                   uncertain_label=False, n_class_attr=2, image_dir='images',
@@ -89,6 +98,41 @@ def load_cub_data(pkl_paths, use_attr, no_img, batch_size,
         loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle,
                             drop_last=drop_last)
     return loader
+
+def find_class_imbalance(pkl_file, multiple_attr=False, attr_idx=-1):
+    """
+    Calculate class imbalance ratio for binary attribute labels stored in pkl_file
+    If attr_idx >= 0, then only return ratio for the corresponding attribute id
+    If multiple_attr is True, then return imbalance ratio separately for each attribute. Else, calculate the overall imbalance across all attributes
+    """
+    imbalance_ratio = []
+    with open(pkl_file, 'rb') as f:
+        data = pickle.load(f)
+    n = len(data)
+    n_attr = len(data[0]['attribute_label'])
+    if attr_idx >= 0:
+        n_attr = 1
+    if multiple_attr:
+        n_ones = [0] * n_attr
+        total = [n] * n_attr
+    else:
+        n_ones = [0]
+        total = [n * n_attr]
+    for d in data:
+        labels = d['attribute_label']
+        if multiple_attr:
+            for i in range(n_attr):
+                n_ones[i] += labels[i]
+        else:
+            if attr_idx >= 0:
+                n_ones[0] += labels[attr_idx]
+            else:
+                n_ones[0] += sum(labels)
+    for j in range(len(n_ones)):
+        imbalance_ratio.append(total[j]/n_ones[j] - 1)
+    if not multiple_attr: #e.g. [9.0] --> [9.0] * 312
+        imbalance_ratio *= n_attr
+    return imbalance_ratio
 
 class CUBDataset(Dataset):
     """

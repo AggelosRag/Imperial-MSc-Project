@@ -81,7 +81,6 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                     state[k] = v.to(self.device)
 
 
-
     def _train_epoch(self, epoch):
 
         print(f"Training Epoch {epoch}")
@@ -134,6 +133,10 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                                                       value=list(bce_loss_per_concept.detach().cpu().numpy()),
                                                       batch_size=batch_size,
                                                       mode='train')
+                    # Track target training loss and accuracy
+                    self.metrics_tracker.track_total_train_correct_per_epoch_per_concept(
+                        preds=C_pred, labels=C_batch
+                    )
 
                 # Calculate Label losses
                 loss_label = self.criterion_label(outputs, y_batch)
@@ -144,6 +147,9 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
 
                 # Track target training loss and accuracy
                 self.metrics_tracker.track_total_train_correct_per_epoch(
+                    preds=outputs["prediction_out"], labels=y_batch
+                )
+                self.metrics_tracker.track_total_train_correct_per_epoch_per_class(
                     preds=outputs["prediction_out"], labels=y_batch
                 )
 
@@ -176,12 +182,12 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                     #                          iteration=str(self.iteration) + '_joint',
                     #                          mode='train')
 
-                    if (epoch == self.epochs - 1) and self.selective_net == False:
-                        self._build_tree_with_fixed_roots(
-                            self.min_samples_leaf, C_pred, y_pred,
-                            self.gt_train_tree, 'train', None,
-                            iteration=str(self.iteration) + '_joint'
-                        )
+                    # if (epoch == self.epochs - 1) and self.selective_net == False:
+                    #     self._build_tree_with_fixed_roots(
+                    #         self.min_samples_leaf, C_pred, y_pred,
+                    #         self.gt_train_tree, 'train', None,
+                    #         iteration=str(self.iteration) + '_joint'
+                    #     )
 
                 if self.cbm_mode == 'joint':
                     loss = self.alpha * loss_concept_total + loss_label["target_loss"]
@@ -286,6 +292,10 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                             value=list(bce_loss_per_concept.detach().cpu().numpy()),
                             batch_size=batch_size,
                             mode='val')
+                        # Track target training loss and accuracy
+                        self.metrics_tracker.track_total_val_correct_per_epoch_per_concept(
+                            preds=C_pred, labels=C_batch
+                        )
 
                     # Calculate Label losses
                     loss_label = self.criterion_label(outputs, y_batch)
@@ -296,6 +306,9 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
 
                     # Track target training loss and accuracy
                     self.metrics_tracker.track_total_val_correct_per_epoch(
+                        preds=outputs["prediction_out"], labels=y_batch
+                    )
+                    self.metrics_tracker.track_total_val_correct_per_epoch_per_class(
                         preds=outputs["prediction_out"], labels=y_batch
                     )
 
@@ -328,12 +341,12 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                         #                          'None', 'None', mode='val',
                         #                          iteration=str(self.iteration) + '_joint')
 
-                        if (epoch == self.epochs - 1) and self.selective_net == False:
-                            self._build_tree_with_fixed_roots(
-                                self.min_samples_leaf, C_pred, y_pred,
-                                self.gt_val_tree, 'val', None,
-                                iteration=str(self.iteration) + '_joint'
-                            )
+                        # if (epoch == self.epochs - 1) and self.selective_net == False:
+                        #     self._build_tree_with_fixed_roots(
+                        #         self.min_samples_leaf, C_pred, y_pred,
+                        #         self.gt_val_tree, 'val', None,
+                        #         iteration=str(self.iteration) + '_joint'
+                        #     )
 
                     if self.cbm_mode == 'joint':
                         loss = self.alpha * loss_concept_total + loss_label[

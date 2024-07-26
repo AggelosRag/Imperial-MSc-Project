@@ -1,3 +1,4 @@
+import torch.utils.data
 from matplotlib import pyplot as plt
 
 from epoch_trainers.xc_epoch_trainer import XC_Epoch_Trainer
@@ -29,12 +30,26 @@ class IndependentCBMTrainer:
             self.valid_data_loader)
 
         # create a new dataloader for the c->y model
-        train_data_loader = self.data_loader.dataset.get_all_data_in_tensors(
-            batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=True
-        )
-        val_data_loader = self.valid_data_loader.dataset.get_all_data_in_tensors(
-            batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=False
-        )
+        if isinstance(self.data_loader.dataset, torch.utils.data.TensorDataset):
+            all_C = self.data_loader.dataset[:][1]
+            all_y = self.data_loader.dataset[:][2]
+            all_C_val = self.valid_data_loader.dataset[:][1]
+            all_y_val = self.valid_data_loader.dataset[:][2]
+            train_dataset = torch.utils.data.TensorDataset(all_C, all_y)
+            val_dataset = torch.utils.data.TensorDataset(all_C_val, all_y_val)
+            train_data_loader = torch.utils.data.DataLoader(
+                train_dataset, batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=True
+            )
+            val_data_loader = torch.utils.data.DataLoader(
+                val_dataset, batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=False
+            )
+        else:
+            train_data_loader = self.data_loader.dataset.get_all_data_in_tensors(
+                batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=True
+            )
+            val_data_loader = self.valid_data_loader.dataset.get_all_data_in_tensors(
+                batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=False
+            )
         # define the c->y model
         self.reg = reg
         if reg == 'Tree':

@@ -28,6 +28,12 @@ class CYLogger:
 
         self.n_classes = config['dataset']['num_classes']
         self.n_concepts = config['dataset']['num_concepts']
+        self.class_names = config['dataset']['class_names']
+
+        y_all_train = self.train_loader.dataset[:][1]
+        y_all_val = self.val_loader.dataset[:][1]
+        self.class_counts_train = count_labels_per_class(y_all_train)
+        self.class_counts_val = count_labels_per_class(y_all_val)
 
         self.run_id = 0
         self.run_data = []
@@ -86,6 +92,8 @@ class CYLogger:
             "train_feature_importance": np.zeros(self.n_concepts),
             "val_feature_importance": np.zeros(self.n_concepts),
         }
+        self.train_accuracy_per_class = np.zeros(self.n_classes)
+        self.val_accuracy_per_class = np.zeros(self.n_classes)
 
         self.all_epoch_attributes = {key: [] for key in
                                      self.attributes_per_epoch}
@@ -94,6 +102,8 @@ class CYLogger:
 
         self.all_epoch_list_attributes = {key: [] for key in
                                           self.list_attributes_per_epoch}
+        self.all_epoch_list_attributes["train_accuracy_per_class"] = []
+        self.all_epoch_list_attributes["val_accuracy_per_class"] = []
 
     def begin_run(self):
         """
@@ -127,7 +137,7 @@ class CYLogger:
             self.tensor_attributes_per_epoch[key] = torch.FloatTensor().to(
                 self.device)
         for key in self.list_attributes_per_epoch:
-            self.list_attributes_per_epoch[key] = np.zeros(self.n_concepts)
+            self.list_attributes_per_epoch[key].fill(0)
 
         self.train_accuracy = None
         self.val_accuracy = None
@@ -137,6 +147,9 @@ class CYLogger:
         self.val_n_selected = 0
         self.val_n_rejected = 0
         self.val_coverage = 0
+
+        self.train_accuracy_per_class = np.zeros(self.n_classes)
+        self.val_accuracy_per_class = np.zeros(self.n_classes)
 
         self.epoch_id += 1
 
@@ -183,6 +196,14 @@ class CYLogger:
         self.all_epoch_attributes["train_accuracy"].append(self.train_accuracy)
         self.all_epoch_attributes["val_accuracy"].append(self.val_accuracy)
 
+        for i in range (self.n_classes):
+            self.train_accuracy_per_class[i] /= self.class_counts_train[i]
+            self.val_accuracy_per_class[i] /= self.class_counts_val[i]
+        self.all_epoch_list_attributes["train_accuracy_per_class"].append(
+            (self.train_accuracy_per_class).tolist())
+        self.all_epoch_list_attributes["val_accuracy_per_class"].append(
+            (self.val_accuracy_per_class).tolist())
+
         for key in self.list_attributes_per_epoch:
             if key.startswith("train_"):
                 dataset_length = len(self.train_loader.dataset)
@@ -190,10 +211,9 @@ class CYLogger:
                 dataset_length = len(self.val_loader.dataset)
             else:
                 raise ValueError("Invalid key")
-            self.list_attributes_per_epoch[key] = \
-            self.list_attributes_per_epoch[key] / dataset_length
-            self.all_epoch_list_attributes[key].append(
-                (self.list_attributes_per_epoch[key]).tolist())
+            self.list_attributes_per_epoch[key] = self.list_attributes_per_epoch[key] / dataset_length
+            self.all_epoch_list_attributes[key].append((self.list_attributes_per_epoch[key]).tolist())
+
         for key in self.attributes_per_epoch:
             if key.startswith("train_"):
                 dataset_length = len(self.train_loader.dataset)
@@ -205,95 +225,104 @@ class CYLogger:
             self.all_epoch_attributes[key].append(
                 self.attributes_per_epoch[key])
 
-        self.tb.add_scalar("Epoch_stats_model/Train_accuracy",
+        self.tb.add_scalar("CY_Logger/Train_accuracy",
                            self.train_accuracy, self.epoch_id)
-        self.tb.add_scalar("Epoch_stats_model/Val_accuracy", self.val_accuracy,
+        self.tb.add_scalar("CY_Logger/Val_accuracy", self.val_accuracy,
                            self.epoch_id)
 
-        self.tb.add_scalar("Epoch_Loss/Train_Loss",
+        self.tb.add_scalar("CY_Logger/Train_Loss",
                            self.attributes_per_epoch['train_loss'],
                            self.epoch_id)
-        self.tb.add_scalar("Epoch_Loss/Val_Loss",
+        self.tb.add_scalar("CY_Logger/Val_Loss",
                            self.attributes_per_epoch['val_loss'], self.epoch_id)
 
-        self.tb.add_scalar("Epoch_stats_model/Train_APL",
+        self.tb.add_scalar("CY_Logger/Train_APL",
                            self.attributes_per_epoch['train_APL'],
                            self.epoch_id)
-        self.tb.add_scalar("Epoch_stats_model/Val_APL",
+        self.tb.add_scalar("CY_Logger/Val_APL",
                            self.attributes_per_epoch['val_APL'], self.epoch_id)
 
-        self.tb.add_scalar("Epoch_stats_model/Train_Fidelity",
+        self.tb.add_scalar("CY_Logger/Train_Fidelity",
                            self.attributes_per_epoch['train_fidelity'],
                            self.epoch_id)
-        self.tb.add_scalar("Epoch_stats_model/Val_Fidelity",
+        self.tb.add_scalar("CY_Logger/Val_Fidelity",
                            self.attributes_per_epoch['val_fidelity'],
                            self.epoch_id)
 
-        self.tb.add_scalar("Epoch_stats_model/Train_APL_predictions",
+        self.tb.add_scalar("CY_Logger/Train_APL_predictions",
                            self.attributes_per_epoch['train_APL_predictions'],
                            self.epoch_id)
-        self.tb.add_scalar("Epoch_stats_model/Val_APL_predictions",
+        self.tb.add_scalar("CY_Logger/Val_APL_predictions",
                            self.attributes_per_epoch['val_APL_predictions'],
                            self.epoch_id)
+
+        # report class accuracies
+        for i in range(self.n_classes):
+            self.tb.add_scalar(f"CY_Logger Train Accuracy Per Class/Train Accuracy Class {self.class_names[i]}",
+                               self.train_accuracy_per_class[i],
+                               self.epoch_id)
+            self.tb.add_scalar(f"CY_Logger Val Accuracy Per Class/Val Accuracy Class {self.class_names[i]}",
+                               self.val_accuracy_per_class[i],
+                               self.epoch_id)
 
         if selectivenet:
             self.track_selectivenet_stats()
 
     def track_selectivenet_stats(self):
 
-        self.tb.add_scalar("Loss_train/Empirical_Coverage ",
+        self.tb.add_scalar("SelectiveNet Train/Empirical_Coverage ",
                            self.attributes_per_epoch["train_emp_coverage"],
                            self.epoch_id)
-        self.tb.add_scalar("Loss_train/CE_Risk",
+        self.tb.add_scalar("SelectiveNet Train/CE_Risk",
                            self.attributes_per_epoch["train_CE_risk"],
                            self.epoch_id)
-        self.tb.add_scalar("Loss_train/Emp_Risk (KD + Entropy)",
+        self.tb.add_scalar("SelectiveNet Train/Emp_Risk (KD + Entropy)",
                            self.attributes_per_epoch["train_emp_risk"],
                            self.epoch_id)
-        self.tb.add_scalar("Loss_train/Cov_Penalty",
+        self.tb.add_scalar("SelectiveNet Train/Cov_Penalty",
                            self.attributes_per_epoch["train_cov_penalty"],
                            self.epoch_id)
         self.tb.add_scalar(
-            "Loss_train/Selective_Loss (Emp + Cov)",
+            "SelectiveNet Train/Selective_Loss (Emp + Cov)",
             self.attributes_per_epoch["train_selective_loss"], self.epoch_id
         )
-        self.tb.add_scalar("Loss_train/Aux_Loss",
+        self.tb.add_scalar("SelectiveNet Train/Aux_Loss",
                            self.attributes_per_epoch["train_aux_loss"],
                            self.epoch_id)
-        self.tb.add_scalar("Loss_val/Empirical_Coverage ",
+        self.tb.add_scalar("SelectiveNet Val/Empirical_Coverage ",
                            self.attributes_per_epoch["val_emp_coverage"],
                            self.epoch_id)
-        self.tb.add_scalar("Loss_val/CE_Risk",
+        self.tb.add_scalar("SelectiveNet Val/CE_Risk",
                            self.attributes_per_epoch["val_CE_risk"],
                            self.epoch_id)
-        self.tb.add_scalar("Loss_val/Emp_Risk (KD + Entropy)",
+        self.tb.add_scalar("SelectiveNet Val/Emp_Risk (KD + Entropy)",
                            self.attributes_per_epoch["val_emp_risk"],
                            self.epoch_id)
-        self.tb.add_scalar("Loss_val/Cov_Penalty",
+        self.tb.add_scalar("SelectiveNet Val/Cov_Penalty",
                            self.attributes_per_epoch["val_cov_penalty"],
                            self.epoch_id)
         self.tb.add_scalar(
-            "Loss_val/Selective_Loss (Emp + Cov)",
+            "SelectiveNet Val/Selective_Loss (Emp + Cov)",
             self.attributes_per_epoch["val_selective_loss"], self.epoch_id
         )
-        self.tb.add_scalar("Loss_val/Aux_Loss",
+        self.tb.add_scalar("SelectiveNet Val/Aux_Loss",
                            self.attributes_per_epoch["val_aux_loss"],
                            self.epoch_id)
 
         self.tb.add_scalar(
-            "Epoch_stats/Accuracy_Correctly_Selected (pi >= 0.5)",
+            "SelectiveNet Val Main/Accuracy_Correctly_Selected (pi >= 0.5)",
             self.val_correct_accuracy, self.epoch_id
         )
         self.tb.add_scalar(
-            "Epoch_stats/Accuracy_Correctly_Rejected (pi < 0.5)",
+            "SelectiveNet Val Main/Accuracy_Correctly_Rejected (pi < 0.5)",
             self.val_incorrect_accuracy, self.epoch_id
         )
 
-        self.tb.add_scalar("Val_Pi_stats/N_Selected", self.val_n_selected,
+        self.tb.add_scalar("SelectiveNet Val Main/N_Selected", self.val_n_selected,
                            self.epoch_id)
-        self.tb.add_scalar("Val_Pi_stats/N_Rejected", self.val_n_rejected,
+        self.tb.add_scalar("SelectiveNet Val Main/N_Rejected", self.val_n_rejected,
                            self.epoch_id)
-        self.tb.add_scalar("Val_Pi_stats/coverage", self.val_coverage,
+        self.tb.add_scalar("SelectiveNet Val Main/coverage", self.val_coverage,
                            self.epoch_id)
 
     def __str__(self):
@@ -492,6 +521,30 @@ class CYLogger:
                                                                       labels,
                                                                       self.n_classes)
 
+    def track_total_train_correct_per_epoch_per_class(self, preds, labels):
+        """
+        Calculates the correct prediction at the each iteration of batch.
+
+        :param preds: predicted labels
+        :param labels: true labels
+
+        :return: the totalcorrect prediction at the each iteration of batch
+        """
+        correct_per_column = correct_predictions_per_class(preds, labels, self.n_classes)
+        self.train_accuracy_per_class += np.array([x for x in correct_per_column])
+
+    def track_total_val_correct_per_epoch_per_class(self, preds, labels):
+        """
+        Calculates the correct prediction at the each iteration of batch.
+
+        :param preds: predicted labels
+        :param labels: true labels
+
+        :return: the totalcorrect prediction at the each iteration of batch
+        """
+        correct_per_column = correct_predictions_per_class(preds, labels, self.n_classes)
+        self.val_accuracy_per_class += np.array([x for x in correct_per_column])
+
     def result(self):
         performance_dict = {**self.all_epoch_list_attributes,
                             **self.all_epoch_attributes}
@@ -515,4 +568,7 @@ class CYLogger:
         performance_dict['val_n_selected'] = self.val_n_selected
         performance_dict['val_n_rejected'] = self.val_n_rejected
         performance_dict['val_coverage'] = self.val_coverage
+
+        performance_dict['train_accuracy_per_class'] = self.train_accuracy_per_class
+        performance_dict['val_accuracy_per_class'] = self.val_accuracy_per_class
         return performance_dict

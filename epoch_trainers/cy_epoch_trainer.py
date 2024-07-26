@@ -100,6 +100,9 @@ class CY_Epoch_Trainer(EpochTrainerBase):
                 self.metrics_tracker.track_total_train_correct_per_epoch(
                     preds=outputs["prediction_out"], labels=y_batch
                 )
+                self.metrics_tracker.track_total_train_correct_per_epoch_per_class(
+                    preds=outputs["prediction_out"], labels=y_batch
+                )
 
                 # if we operate in SGD mode, then X_batch + X_rest = X
                 # We still need the complete dataset to compute the APL
@@ -216,6 +219,9 @@ class CY_Epoch_Trainer(EpochTrainerBase):
 
                     # Track target training loss and accuracy
                     self.metrics_tracker.track_total_val_correct_per_epoch(
+                        preds=outputs["prediction_out"], labels=y_batch
+                    )
+                    self.metrics_tracker.track_total_val_correct_per_epoch_per_class(
                         preds=outputs["prediction_out"], labels=y_batch
                     )
 

@@ -41,6 +41,9 @@ class JointCBMTrainer:
         self.epoch_trainer._training_loop(self.epochs)
         self.plot()
 
+    def test(self):
+        pass
+
 
     def plot(self):
 

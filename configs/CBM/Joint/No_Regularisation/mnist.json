@@ -14,7 +14,6 @@
     "dataset": {
         "num_classes": 3,
         "num_concepts": 12,
-        "train_size": 8858,
         "concept_names": ["thickness_small", "thickness_medium", "thickness_large", "thickness_xlarge",
                          "width_small", "width_medium", "width_large", "width_xlarge",
                          "length_small", "length_medium", "length_large", "length_xlarge"],
@@ -32,7 +31,7 @@
     "trainer": {
         "type": "JointCBMTrainer",
         "args": {},
-        "epochs": 2500,
+        "epochs": 30,
         "save_dir": "saved/",
         "save_period": 1000,
         "verbosity": 2,

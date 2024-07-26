@@ -192,7 +192,7 @@ def get_mnist_dataLoader(data_dir='./datasets/parabola',
     else:
         NotImplementedError('ERROR: data type not supported!')
 
-    return data_train_loader, data_test_loader
+    return data_train_loader, data_test_loader, _
 
 
 def get_mnist_cy_dataLoader(ratio=0.2,

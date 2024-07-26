@@ -8,7 +8,7 @@ from model.loss import SelectiveNetLoss, CELoss
 
 
 class MNISTCBMTreeArchitecture:
-    def __init__(self, config, hard_concepts=None):
+    def __init__(self, config, device, hard_concepts=None):
 
         if hard_concepts is None:
             self.hard_concepts = []
@@ -26,8 +26,8 @@ class MNISTCBMTreeArchitecture:
         self.model = TreeNet(self.mn_model, self.sr_model)
 
         # Define loss functions and optimizers
-        self.criterion_concept = nn.BCELoss(reduction='none')  # BCE Loss for binary concepts
-        self.criterion_label = CELoss()
+        self.criterion_concept = torch.nn.BCEWithLogitsLoss()
+        self.criterion_per_concept = nn.BCEWithLogitsLoss(reduction='none')  # BCE Loss for binary concepts        self.criterion_label = CELoss()
         self.criterion_sr = nn.MSELoss()
 
         self.optimizer = torch.optim.Adam(self.model.parameters(),
@@ -37,7 +37,7 @@ class MNISTCBMTreeArchitecture:
         self.optimizer_mn = torch.optim.Adam(self.mn_model.parameters(), lr=0.001)
 
 class MNISTCBMArchitecture:
-    def __init__(self, config, hard_concepts=None):
+    def __init__(self, config, device, hard_concepts=None):
 
         if hard_concepts is None:
             self.hard_concepts = []
@@ -51,8 +51,8 @@ class MNISTCBMArchitecture:
         self.model = MainNetwork(self.concept_predictor, self.label_predictor)
 
         # Define loss functions and optimizers
-        self.criterion_concept = nn.BCELoss(reduction='none')  # BCE Loss for binary concepts
-        #self.concept_weights = torch.ones(config["dataset"]["num_concepts"])
+        self.criterion_concept = torch.nn.BCEWithLogitsLoss()
+        self.criterion_per_concept = nn.BCEWithLogitsLoss(reduction='none')
         self.criterion_label = CELoss()
 
         if "weight_decay" not in config["model"]:
@@ -82,7 +82,7 @@ class MNISTCBMArchitecture:
         # self.concept_weights = torch.tensor((np.array(feature_importances) * 10))
 
 class MNISTCBMSelectiveNetArchitecture:
-    def __init__(self, config, hard_concepts=None):
+    def __init__(self, config, device, hard_concepts=None):
 
         if hard_concepts is None:
             self.hard_concepts = []
@@ -107,8 +107,8 @@ class MNISTCBMSelectiveNetArchitecture:
                                         num_classes=config["dataset"]["num_classes"])
 
         # Define loss functions and optimizers
-        self.criterion_concept = nn.BCELoss(reduction='none')  # BCE Loss for binary concepts
-        #self.concept_weights = torch.ones(config["dataset"]["num_concepts"])
+        self.criterion_concept = torch.nn.BCEWithLogitsLoss()
+        self.criterion_per_concept = nn.BCEWithLogitsLoss(reduction='none')
         CE = nn.CrossEntropyLoss(reduction='none')
         self.criterion_label = SelectiveNetLoss(
             iteration=1, CE=CE,
@@ -166,7 +166,7 @@ class ConceptPredictor(nn.Module):
         x = torch.relu(self.fc1(x))
         x = torch.relu(self.fc2(x))
         #x = self.fc3(x)
-        x = torch.sigmoid(self.fc3(x))  # Sigmoid activation for binary concepts
+        x = self.fc3(x)  # Sigmoid activation for binary concepts
         return x
 
 class LabelPredictor(nn.Module):

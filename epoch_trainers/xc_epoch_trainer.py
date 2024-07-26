@@ -77,6 +77,10 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                                                   value=list(bce_loss_per_concept.detach().cpu().numpy()),
                                                   batch_size=batch_size,
                                                   mode='train')
+                # Track target training loss and accuracy
+                self.metrics_tracker.track_total_train_correct_per_epoch_per_concept(
+                    preds=C_pred, labels=C_batch
+                )
 
                 # Track target training loss and accuracy
                 # self.metrics_tracker.track_total_train_correct_per_epoch(
@@ -137,6 +141,10 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                         value=list(bce_loss_per_concept.detach().cpu().numpy()),
                         batch_size=batch_size,
                         mode='val')
+                    # Track target training loss and accuracy
+                    self.metrics_tracker.track_total_val_correct_per_epoch_per_concept(
+                        preds=C_pred, labels=C_batch
+                    )
 
                     # Track target training loss and accuracy
                     # self.metrics_tracker.track_total_val_correct_per_epoch(

@@ -56,6 +56,82 @@ def get_correct(y_hat, y, num_classes):
     else:
         return y_hat.argmax(dim=1).eq(y).sum().item()
 
+def correct_predictions_per_class(logits, true_labels, num_classes,
+                                  threshold=0.5):
+    """
+    Calculate the number of correct predictions per class.
+
+    Parameters:
+    logits (torch.Tensor): A tensor of predicted logits (shape: [batch_size, num_classes] or [batch_size]).
+    true_labels (torch.Tensor): A tensor of true labels (shape: [batch_size]).
+    num_classes (int): The number of classes.
+    threshold (float): Threshold to convert logits to binary predictions for single class case.
+
+    Returns:
+    list: A list containing the number of correct predictions for each class.
+    """
+    if num_classes == 1:
+        # Binary classification case
+        probabilities = torch.sigmoid(logits)
+        predicted_classes = torch.where(probabilities >= threshold, 1, 0)
+    else:
+        # Multi-class classification case
+        predicted_classes = torch.argmax(logits, dim=1)
+
+    # Initialize a list to store the number of correct predictions per class
+    correct_counts = [0] * num_classes
+
+    # Iterate over each class and count correct predictions
+    for class_idx in range(num_classes):
+        correct_counts[class_idx] = torch.sum(
+            (predicted_classes == class_idx) & (
+                        true_labels == class_idx)).item()
+
+    return correct_counts
+
+def column_get_correct(logits, labels, threshold=0.5):
+    """
+    Calculate accuracy per column for predicted logits.
+
+    Parameters:
+    logits (torch.Tensor): A tensor of predicted logits (shape: [batch_size, num_labels]).
+    labels (torch.Tensor): A tensor of true labels (shape: [batch_size, num_labels]).
+    threshold (float): Threshold to convert logits to binary predictions.
+
+    Returns:
+    torch.Tensor: A tensor containing the accuracy for each column.
+    """
+    # Apply sigmoid to logits to get probabilities
+    probabilities = torch.sigmoid(logits)
+
+    # Convert probabilities to binary predictions based on the threshold
+    predictions = (probabilities >= threshold).float()
+
+    # Calculate accuracy per column
+    correct_predictions = (predictions == labels).float()
+    correct_predictions = correct_predictions.sum(dim=0)
+
+    return correct_predictions
+
+def count_labels_per_class(y):
+    """
+    Count the number of ground truth labels per class.
+
+    Parameters:
+    y (torch.Tensor): A tensor of ground truth class labels (shape: [batch_size]).
+
+    Returns:
+    dict: A dictionary with the class labels as keys and the number of ground truth labels as values.
+    """
+    # Get unique class labels and their counts
+    unique_labels, counts = torch.unique(y, return_counts=True)
+
+    # Create a dictionary with class labels as keys and counts as values
+    label_counts = {int(label.item()): int(count.item()) for label, count in
+                    zip(unique_labels, counts)}
+
+    return label_counts
+
 def compute_AUC(gt, pred):
     """Computes Area Under the Curve (AUC) from prediction scores.
 

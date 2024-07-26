@@ -88,7 +88,6 @@ class EpochTrainerBase(TrainerBase):
                         mode, iteration=None):
 
         # export tree
-        plt.figure(figsize=(20, 20))
         # plot_tree(model, filled=True)
         #dot_data = StringIO()
         dot_data = export_graphviz(

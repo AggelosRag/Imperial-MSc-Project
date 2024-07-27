@@ -32,7 +32,7 @@ class JointCBMTrainer:
         else:
             self.epoch_trainer = XCY_Epoch_Trainer(self.arch, self.config,
                                                    self.device,
-                                                   self.data_loader, 'joint',
+                                                   self.data_loader,
                                                    self.valid_data_loader,
                                                    self.iteration)
 

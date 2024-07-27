@@ -44,26 +44,36 @@ class CUBCBMArchitecture:
             xc_params_to_update = [
                 {'params': self.model.concept_predictor.parameters(), 'weight_decay': config["model"]['xc_weight_decay']},
             ]
-            self.xc_optimizer = torch.optim.Adam(xc_params_to_update, lr=config["model"]['xc_lr'])
+            # self.xc_optimizer = torch.optim.Adam(xc_params_to_update, lr=config["model"]['xc_lr'])
+            self.xc_optimizer = torch.optim.SGD(
+                xc_params_to_update,
+                lr=config["model"]['xc_lr'],
+                momentum=config["model"]['xc_momentum'],
+            )
             if "pretrained_concept_predictor" in config["model"]:
                 self.xc_optimizer.load_state_dict(torch.load(config["model"]["pretrained_concept_predictor"])["optimizer"])
             cy_params_to_update = [
                 {'params': self.model.label_predictor.parameters(), 'weight_decay': config["model"]['cy_weight_decay']},
             ]
             self.cy_optimizer = torch.optim.Adam(cy_params_to_update, lr=config["model"]['cy_lr'])
+            # self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.xc_optimizer, verbose=True)
+            self.lr_scheduler = torch.optim.lr_scheduler.StepLR(self.xc_optimizer, step_size=30, gamma=0.1)
         else:
             # only apply regularisation (if any) to the label predictor,
             # for a fair comparison with Tree Regularisation
             params_to_update = [
                 {'params': self.model.concept_predictor.parameters(),
-                 'weight_decay': 0},
+                 'weight_decay': 0.000004, 'momentum': 0.9},
                 {'params': self.model.label_predictor.parameters(),
                  'weight_decay': config["model"]['weight_decay']},
             ]
-            self.optimizer = torch.optim.Adam(params_to_update,
-                                              lr=config["model"]['lr'])
+            # self.optimizer = torch.optim.Adam(params_to_update,
+            #                                   lr=config["model"]['lr'])
+            self.optimizer = torch.optim.SGD(params_to_update)
             if "pretrained_concept_predictor" in config["model"]:
                 self.optimizer.load_state_dict(torch.load(config["model"]["pretrained_concept_predictor"])["optimizer"])
+            # self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.xc_optimizer, verbose=True)
+            self.lr_scheduler = torch.optim.lr_scheduler.StepLR(self.xc_optimizer, step_size=30, gamma=0.1)
 
 
 class MainNetwork(nn.Module):

@@ -19,8 +19,8 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
     Trainer Epoch class using Tree Regularization
     """
 
-    def __init__(self, arch, config, device, data_loader, cbm_mode,
-                 valid_data_loader=None, iteration=None, lr_scheduler=None):
+    def __init__(self, arch, config, device, data_loader,
+                 valid_data_loader=None, iteration=None):
 
         super(XCY_Epoch_Trainer, self).__init__(arch, config, iteration)
 
@@ -29,8 +29,8 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
         self.device = device
         self.train_loader = data_loader
         self.val_loader = valid_data_loader
-        self.lr_scheduler = lr_scheduler
         self.arch = arch
+        self.lr_scheduler = arch.lr_scheduler
         self.model = arch.model.to(self.device)
         self.alpha = config['model']['alpha']
         self.criterion_concept = arch.criterion_concept
@@ -43,7 +43,6 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
         print("Device: ", self.device)
 
         self.do_validation = self.val_loader is not None
-        self.cbm_mode = cbm_mode
         self.hard_concepts = self.arch.hard_concepts
         self.soft_concepts = [i for i in range(self.num_concepts) if i not in self.hard_concepts]
 
@@ -51,22 +50,12 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
         self.sorted_concept_indices = torch.argsort(torch.tensor(combined_indices))
 
         # Initialize the metrics tracker
-        if cbm_mode == 'joint':
-            self.metrics_tracker = JointCBMLogger(config, iteration=iteration,
-                                                  tb_path=str(self.config.log_dir),
-                                                  output_path=str(self.config.save_dir),
-                                                  train_loader=self.train_loader,
-                                                  val_loader=self.val_loader,
-                                                  device=self.device)
-        elif cbm_mode == 'sequential':
-            self.metrics_tracker = CYLogger(config, iteration=1,
-                                           tb_path=str(self.config.log_dir),
-                                           output_path=str(self.config.save_dir),
-                                           train_loader=self.train_loader,
-                                           val_loader=self.val_loader,
-                                           device=self.device)
-        else:
-            raise ValueError(f"Unknown CBM mode: {cbm_mode}")
+        self.metrics_tracker = JointCBMLogger(config, iteration=iteration,
+                                              tb_path=str(self.config.log_dir),
+                                              output_path=str(self.config.save_dir),
+                                              train_loader=self.train_loader,
+                                              val_loader=self.val_loader,
+                                              device=self.device)
         self.metrics_tracker.begin_run()
 
         # check if selective net is used
@@ -122,22 +111,21 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                     outputs = {"prediction_out": y_pred, "selection_out": out_selector, "out_aux": out_aux}
 
                 # Calculate Concept losses
-                if self.cbm_mode == 'joint':
-                    loss_concept_total = self.criterion_concept(C_pred, C_batch)
-                    bce_loss_per_concept = self.criterion_per_concept(C_pred, C_batch)
-                    bce_loss_per_concept = torch.mean(bce_loss_per_concept, dim=0)
-                    self.metrics_tracker.update_batch(update_dict_or_key='concept_loss',
-                                                      value=loss_concept_total.detach().cpu().item(),
-                                                      batch_size=batch_size,
-                                                      mode='train')
-                    self.metrics_tracker.update_batch(update_dict_or_key='loss_per_concept',
-                                                      value=list(bce_loss_per_concept.detach().cpu().numpy()),
-                                                      batch_size=batch_size,
-                                                      mode='train')
-                    # Track target training loss and accuracy
-                    self.metrics_tracker.track_total_train_correct_per_epoch_per_concept(
-                        preds=C_pred, labels=C_batch
-                    )
+                loss_concept_total = self.criterion_concept(C_pred, C_batch)
+                bce_loss_per_concept = self.criterion_per_concept(C_pred, C_batch)
+                bce_loss_per_concept = torch.mean(bce_loss_per_concept, dim=0)
+                self.metrics_tracker.update_batch(update_dict_or_key='concept_loss',
+                                                  value=loss_concept_total.detach().cpu().item(),
+                                                  batch_size=batch_size,
+                                                  mode='train')
+                self.metrics_tracker.update_batch(update_dict_or_key='loss_per_concept',
+                                                  value=list(bce_loss_per_concept.detach().cpu().numpy()),
+                                                  batch_size=batch_size,
+                                                  mode='train')
+                # Track target training loss and accuracy
+                self.metrics_tracker.track_total_train_correct_per_epoch_per_concept(
+                    preds=C_pred, labels=C_batch
+                )
 
                 # Calculate Label losses
                 loss_label = self.criterion_label(outputs, y_batch)
@@ -190,10 +178,7 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                     #         iteration=str(self.iteration) + '_joint'
                     #     )
 
-                if self.cbm_mode == 'joint':
-                    loss = self.alpha * loss_concept_total + loss_label["target_loss"]
-                else:
-                    loss = loss_label["target_loss"]
+                loss = self.alpha * loss_concept_total + loss_label["target_loss"]
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -279,24 +264,23 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                             mode='val')
 
                     # Calculate Concept losses
-                    if self.cbm_mode == 'joint':
-                        loss_concept_total = self.criterion_concept(C_pred, C_batch)
-                        bce_loss_per_concept = self.criterion_per_concept(C_pred, C_batch)
-                        bce_loss_per_concept = torch.mean(bce_loss_per_concept, dim=0)
-                        self.metrics_tracker.update_batch(
-                            update_dict_or_key='concept_loss',
-                            value=loss_concept_total.detach().cpu().item(),
-                            batch_size=batch_size,
-                            mode='val')
-                        self.metrics_tracker.update_batch(
-                            update_dict_or_key='loss_per_concept',
-                            value=list(bce_loss_per_concept.detach().cpu().numpy()),
-                            batch_size=batch_size,
-                            mode='val')
-                        # Track target training loss and accuracy
-                        self.metrics_tracker.track_total_val_correct_per_epoch_per_concept(
-                            preds=C_pred, labels=C_batch
-                        )
+                    loss_concept_total = self.criterion_concept(C_pred, C_batch)
+                    bce_loss_per_concept = self.criterion_per_concept(C_pred, C_batch)
+                    bce_loss_per_concept = torch.mean(bce_loss_per_concept, dim=0)
+                    self.metrics_tracker.update_batch(
+                        update_dict_or_key='concept_loss',
+                        value=loss_concept_total.detach().cpu().item(),
+                        batch_size=batch_size,
+                        mode='val')
+                    self.metrics_tracker.update_batch(
+                        update_dict_or_key='loss_per_concept',
+                        value=list(bce_loss_per_concept.detach().cpu().numpy()),
+                        batch_size=batch_size,
+                        mode='val')
+                    # Track target training loss and accuracy
+                    self.metrics_tracker.track_total_val_correct_per_epoch_per_concept(
+                        preds=C_pred, labels=C_batch
+                    )
 
                     # Calculate Label losses
                     loss_label = self.criterion_label(outputs, y_batch)
@@ -349,11 +333,7 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                         #         iteration=str(self.iteration) + '_joint'
                         #     )
 
-                    if self.cbm_mode == 'joint':
-                        loss = self.alpha * loss_concept_total + loss_label[
-                            "target_loss"]
-                    else:
-                        loss = loss_label["target_loss"]
+                    loss = self.alpha * loss_concept_total + loss_label["target_loss"]
                     self.metrics_tracker.update_batch(update_dict_or_key='loss',
                                                       value=loss.detach().cpu().item(),
                                                       batch_size=batch_size,
@@ -415,11 +395,11 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                     test_metrics["loss_per_concept"] += np.array([x * batch_size for x in bce_loss_per_concept])
 
                     # Track number of corrects per concept
-                    test_metrics["total_correct"] += get_correct(y_pred, y_batch, self.config["dataset"]["num_classes"])
                     correct_per_column = column_get_correct(C_pred, C_batch)
                     test_metrics["accuracy_per_concept"] += np.array([x for x in correct_per_column])
 
                     # Calculate Label losses
+                    test_metrics["total_correct"] += get_correct(y_pred, y_batch, self.config["dataset"]["num_classes"])
                     loss_label = self.criterion_label(outputs, y_batch)
                     test_metrics["target_loss"] += loss_label["target_loss"].detach().cpu().item() * batch_size
 

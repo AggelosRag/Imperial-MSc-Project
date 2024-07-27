@@ -1,3 +1,6 @@
+import os
+import pickle
+
 import numpy as np
 import torch
 from tqdm import tqdm
@@ -7,6 +10,7 @@ from loggers.joint_cbm_logger import JointCBMLogger
 from loggers.xc_logger import XCLogger
 
 from base.epoch_trainer_base import EpochTrainerBase
+from utils import column_get_correct
 
 
 class XC_Epoch_Trainer(EpochTrainerBase):
@@ -14,8 +18,7 @@ class XC_Epoch_Trainer(EpochTrainerBase):
     Trainer Epoch class using Tree Regularization
     """
 
-    def __init__(self, arch, config, device, data_loader,
-                 valid_data_loader=None, lr_scheduler=None):
+    def __init__(self, arch, config, device, data_loader, valid_data_loader=None):
 
         super(XC_Epoch_Trainer, self).__init__(arch, config)
 
@@ -24,12 +27,13 @@ class XC_Epoch_Trainer(EpochTrainerBase):
         self.device = device
         self.train_loader = data_loader
         self.val_loader = valid_data_loader
-        self.lr_scheduler = lr_scheduler
         self.arch = arch
+        self.lr_scheduler = arch.lr_scheduler
         self.model = arch.model.to(self.device)
         self.criterion_per_concept = arch.criterion_per_concept
         self.criterion = arch.criterion_concept
         self.min_samples_leaf = config['regularisation']['min_samples_leaf']
+        self.num_concepts = config['dataset']['num_concepts']
 
         self.do_validation = self.val_loader is not None
 
@@ -79,7 +83,7 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                                                   mode='train')
                 # Track target training loss and accuracy
                 self.metrics_tracker.track_total_train_correct_per_epoch_per_concept(
-                    preds=C_pred, labels=C_batch
+                    preds=C_pred.detach().cpu(), labels=C_batch.detach().cpu()
                 )
 
                 # Track target training loss and accuracy
@@ -143,7 +147,7 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                         mode='val')
                     # Track target training loss and accuracy
                     self.metrics_tracker.track_total_val_correct_per_epoch_per_concept(
-                        preds=C_pred, labels=C_batch
+                        preds=C_pred.detach().cpu(), labels=C_batch.detach().cpu()
                     )
 
                     # Track target training loss and accuracy
@@ -159,3 +163,74 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                     t.set_postfix(
                         batch_id='{0}'.format(batch_idx + 1))
                     t.update()
+
+    def _test(self, test_data_loader, hard_cbm=False):
+
+        self.model.concept_predictor.eval()
+        tensor_C_pred = torch.FloatTensor().to(self.device)
+        tensor_y = torch.LongTensor().to(self.device)
+
+        test_metrics = {"concept_loss": 0, "loss_per_concept": np.zeros(self.num_concepts), "total_correct": 0,
+                        "accuracy_per_concept": np.zeros(self.num_concepts)}
+
+        with torch.no_grad():
+            with tqdm(total=len(test_data_loader), file=sys.stdout) as t:
+                for batch_idx, (X_batch, C_batch, y_batch) in enumerate(test_data_loader):
+
+                    batch_size = X_batch.size(0)
+                    X_batch = X_batch.to(self.device)
+                    C_batch = C_batch.to(self.device)
+                    y_batch = y_batch.to(self.device)
+
+                    # Forward pass
+                    C_pred = self.model.concept_predictor(X_batch)
+                    tensor_C_pred = torch.cat((tensor_C_pred, C_pred), dim=0)
+                    tensor_y = torch.cat((tensor_y, y_batch), dim=0)
+
+                    # Calculate Concept losses
+                    loss_concept_total = self.criterion(C_pred, C_batch)
+                    bce_loss_per_concept = self.criterion_per_concept(C_pred, C_batch)
+                    bce_loss_per_concept = torch.mean(bce_loss_per_concept, dim=0).detach().cpu().numpy()
+
+                    test_metrics["concept_loss"] += loss_concept_total.detach().cpu().item() * batch_size
+                    test_metrics["loss_per_concept"] += np.array([x * batch_size for x in bce_loss_per_concept])
+
+                    # Track number of corrects per concept
+                    correct_per_column = column_get_correct(C_pred, C_batch).detach().cpu().numpy()
+                    test_metrics["accuracy_per_concept"] += np.array([x for x in correct_per_column])
+
+                    t.set_postfix(
+                        batch_id='{0}'.format(batch_idx + 1))
+                    t.update()
+
+        # Update the test metrics
+        test_metrics["concept_loss"] /= len(test_data_loader.dataset)
+        test_metrics["loss_per_concept"] = [x / len(test_data_loader.dataset) for x in test_metrics["loss_per_concept"]]
+        test_metrics["accuracy_per_concept"] = [x / len(test_data_loader.dataset) for x in test_metrics["accuracy_per_concept"]]
+        test_metrics["concept_accuracy"] = sum(test_metrics["accuracy_per_concept"]) / len(test_metrics["accuracy_per_concept"])
+
+        # save test metrics in pickle
+        with open(os.path.join(self.config.save_dir, f"test_metrics_xtoc.pkl"), "wb") as f:
+            pickle.dump(test_metrics, f)
+
+        # print test metrics
+        print("Test Metrics:")
+        print(f"Concept Loss: {test_metrics['concept_loss']}")
+        print(f"Loss per Concept: {test_metrics['loss_per_concept']}")
+        print(f"Concept Accuracy: {test_metrics['concept_accuracy']}")
+        print(f"Accuracy per Concept: {test_metrics['accuracy_per_concept']}")
+
+        # put also in the logger info
+        self.logger.info(f"Test Metrics:")
+        self.logger.info(f"Concept Loss: {test_metrics['concept_loss']}")
+        self.logger.info(f"Loss per Concept: {test_metrics['loss_per_concept']}")
+        self.logger.info(f"Concept Accuracy: {test_metrics['concept_accuracy']}")
+        self.logger.info(f"Accuracy per Concept: {test_metrics['accuracy_per_concept']}")
+
+        # if we use a hard-cbm, convert the predictions to binary
+        if hard_cbm:
+            tensor_C_pred = torch.sigmoid(tensor_C_pred)
+            tensor_C_pred[tensor_C_pred >= 0.5] = 1
+            tensor_C_pred[tensor_C_pred < 0.5] = 0
+
+        return tensor_C_pred, tensor_y

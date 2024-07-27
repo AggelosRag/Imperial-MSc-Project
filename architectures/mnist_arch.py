@@ -76,6 +76,8 @@ class MNISTCBMArchitecture:
             self.optimizer = torch.optim.Adam(params_to_update,
                                               lr=config["model"]['lr'])
 
+        self.lr_scheduler = None
+
     def scale_concept_weights(self, feature_importances):
         # scale the concept weights by the inverse of the feature importances
         self.concept_weights = torch.tensor(1 / (np.array(feature_importances) + 0.1))

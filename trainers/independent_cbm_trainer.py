@@ -30,26 +30,8 @@ class IndependentCBMTrainer:
             self.valid_data_loader)
 
         # create a new dataloader for the c->y model
-        if isinstance(self.data_loader.dataset, torch.utils.data.TensorDataset):
-            all_C = self.data_loader.dataset[:][1]
-            all_y = self.data_loader.dataset[:][2]
-            all_C_val = self.valid_data_loader.dataset[:][1]
-            all_y_val = self.valid_data_loader.dataset[:][2]
-            train_dataset = torch.utils.data.TensorDataset(all_C, all_y)
-            val_dataset = torch.utils.data.TensorDataset(all_C_val, all_y_val)
-            train_data_loader = torch.utils.data.DataLoader(
-                train_dataset, batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=True
-            )
-            val_data_loader = torch.utils.data.DataLoader(
-                val_dataset, batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=False
-            )
-        else:
-            train_data_loader = self.data_loader.dataset.get_all_data_in_tensors(
-                batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=True
-            )
-            val_data_loader = self.valid_data_loader.dataset.get_all_data_in_tensors(
-                batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=False
-            )
+        train_data_loader, val_data_loader = self.create_cy_dataloaders()
+
         # define the c->y model
         self.reg = reg
         if reg == 'Tree':
@@ -79,13 +61,18 @@ class IndependentCBMTrainer:
         self.cy_epoch_trainer._training_loop(self.cy_epochs)
         self.plot_cy()
 
-    def test(self):
+    def test(self, test_data_loader, hard_cbm=True):
+        # evaluate x->c
+        tensor_C_pred, tensor_y = self.xc_epoch_trainer._test(test_data_loader, hard_cbm)
 
-        logger = self.config.get_logger('test')
-        # get x->c predictions
-        predictions = self.xc_epoch_trainer._test_epoch()
-        # get c->y predictions
-        self.cy_epoch_trainer._test_epoch(predictions)
+        # create a new dataloader for the c->y model
+        test_data_loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(tensor_C_pred, tensor_y),
+            batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=False
+        )
+
+        # evaluate c->y
+        self.cy_epoch_trainer._test(test_data_loader)
 
     def plot_xc(self):
         results_trainer = self.xc_epoch_trainer.metrics_tracker.result()
@@ -215,6 +202,27 @@ class IndependentCBMTrainer:
             plt.savefig(str(self.config.log_dir) + '/cy_plots.png')
         #plt.show()
 
+    def create_cy_dataloaders(self):
 
-    def test(self):
-        pass
+        if isinstance(self.data_loader.dataset, torch.utils.data.TensorDataset):
+            all_C = self.data_loader.dataset[:][1]
+            all_y = self.data_loader.dataset[:][2]
+            all_C_val = self.valid_data_loader.dataset[:][1]
+            all_y_val = self.valid_data_loader.dataset[:][2]
+            train_dataset = torch.utils.data.TensorDataset(all_C, all_y)
+            val_dataset = torch.utils.data.TensorDataset(all_C_val, all_y_val)
+            train_data_loader = torch.utils.data.DataLoader(
+                train_dataset, batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=True
+            )
+            val_data_loader = torch.utils.data.DataLoader(
+                val_dataset, batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=False
+            )
+        else:
+            train_data_loader = self.data_loader.dataset.get_all_data_in_tensors(
+                batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=True
+            )
+            val_data_loader = self.valid_data_loader.dataset.get_all_data_in_tensors(
+                batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=False
+            )
+
+        return train_data_loader, val_data_loader

@@ -148,14 +148,21 @@ def get_mnist_dataLoader(data_dir='./datasets/parabola',
     X_train, X_val, C_train, C_val, y_train, y_val = train_test_split(X, C, y,
                                                                       test_size=0.5,
                                                                       random_state=42)
+    X_val, X_test, C_val, C_test, y_val, y_test = train_test_split(X_val, C_val, y_val,
+                                                                      test_size=0.5,
+                                                                      random_state=42)
     # Convert to PyTorch tensors
-    X_train = torch.tensor(X_train[:8858], dtype=torch.float32)
-    C_train = torch.tensor(C_train[:8858], dtype=torch.float32)
-    y_train = torch.tensor(y_train[:8858], dtype=torch.long)
+    X_train = torch.tensor(X_train, dtype=torch.float32)
+    C_train = torch.tensor(C_train, dtype=torch.float32)
+    y_train = torch.tensor(y_train, dtype=torch.long)
 
-    X_val = torch.tensor(X_val[:8858], dtype=torch.float32)
-    C_val = torch.tensor(C_val[:8858], dtype=torch.float32)
-    y_val = torch.tensor(y_val[:8858], dtype=torch.long)
+    X_val = torch.tensor(X_val, dtype=torch.float32)
+    C_val = torch.tensor(C_val, dtype=torch.float32)
+    y_val = torch.tensor(y_val, dtype=torch.long)
+
+    X_test = torch.tensor(X_test, dtype=torch.float32)
+    C_test = torch.tensor(C_test, dtype=torch.float32)
+    y_test = torch.tensor(y_test, dtype=torch.long)
 
     # plot a bar plot with the number of concepts equal to 1 per class
     # for i in range(3):
@@ -167,32 +174,36 @@ def get_mnist_dataLoader(data_dir='./datasets/parabola',
     # Create DataLoader
     train_dataset = TensorDataset(X_train, C_train, y_train)
     val_dataset = TensorDataset(X_val, C_val, y_val)
+    test_dataset = TensorDataset(X_test, C_test, y_test)
 
     if type == 'Full-GD':
         data_train_loader = TwoBatchTripletDataLoader(dataset=train_dataset,
                                                       batch_size=X_train.shape[0],
                                                       shuffle=True)
-        data_test_loader = TwoBatchTripletDataLoader(dataset=val_dataset,
+        data_val_loader = TwoBatchTripletDataLoader(dataset=val_dataset,
                                                      batch_size=X_val.shape[0],
                                                      shuffle=False)
     elif type == 'Two-Batch':
         data_train_loader = TwoBatchTripletDataLoader(dataset=train_dataset,
                                                       batch_size=batch_size,
                                                       shuffle=True)
-        data_test_loader = TwoBatchTripletDataLoader(dataset=val_dataset,
+        data_val_loader = TwoBatchTripletDataLoader(dataset=val_dataset,
                                                      batch_size=batch_size,
                                                      shuffle=False)
     elif type == 'SGD':
         data_train_loader = DataLoader(dataset=train_dataset,
                                       batch_size=batch_size,
                                       shuffle=True)
-        data_test_loader = DataLoader(dataset=val_dataset,
+        data_val_loader = DataLoader(dataset=val_dataset,
+                                      batch_size=batch_size,
+                                      shuffle=False)
+        data_test_loader = DataLoader(dataset=test_dataset,
                                       batch_size=batch_size,
                                       shuffle=False)
     else:
         NotImplementedError('ERROR: data type not supported!')
 
-    return data_train_loader, data_test_loader, _
+    return data_train_loader, data_val_loader, data_test_loader
 
 
 def get_mnist_cy_dataLoader(ratio=0.2,

@@ -60,7 +60,7 @@ def main(config):
     logger.info("\n")
     logger.info("Training completed")
     logger.info("Starting testing ...")
-    trainer.test()
+    trainer.test(test_data_loader)
     print("\nTesting completed")
     logger.info("\n")
     logger.info("Testing completed")

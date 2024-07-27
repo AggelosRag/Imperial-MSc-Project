@@ -38,7 +38,6 @@ class CUBCBMArchitecture:
         # Define loss functions and optimizers
         self.criterion_concept = torch.nn.BCEWithLogitsLoss(weight=self.imbalance)
         self.criterion_per_concept = nn.BCEWithLogitsLoss(reduction='none')  # BCE Loss for binary concepts
-        #self.concept_weights = torch.ones(config["dataset"]["num_concepts"])
         self.criterion_label = CELoss()
 
         if "weight_decay" not in config["model"]:

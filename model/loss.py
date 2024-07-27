@@ -9,9 +9,10 @@ def mse_loss(output, target):
     return F.mse_loss(output, target)
 
 class CELoss(nn.Module):
-    def __init__(self, reduction='mean'):
+    def __init__(self, reduction='mean', weight=None):
         super(CELoss, self).__init__()
-        self.criterion = nn.CrossEntropyLoss(reduction=reduction)
+        self.criterion = nn.CrossEntropyLoss(reduction=reduction,
+                                             weight=weight)
 
     def forward(self, input, target):
         input = input["prediction_out"]

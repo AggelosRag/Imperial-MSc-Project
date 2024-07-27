@@ -37,13 +37,11 @@ class JointCBMTrainer:
                                                    self.iteration)
 
     def train(self):
-
         self.epoch_trainer._training_loop(self.epochs)
         self.plot()
 
-    def test(self):
-        pass
-
+    def test(self, test_data_loader):
+        self.epoch_trainer._test(test_data_loader)
 
     def plot(self):
 

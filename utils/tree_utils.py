@@ -1,5 +1,11 @@
+import re
+
 import numpy as np
-from sklearn.tree import DecisionTreeClassifier
+import seaborn as sns
+import matplotlib.colors as mcolors
+
+from matplotlib import colors
+from sklearn.tree import DecisionTreeClassifier, _tree
 import copy
 
 DEFAULT_FEATURE = -2
@@ -281,3 +287,112 @@ def extract_features_from_splits(tree):
 
     recurse(0)
     return sorted(list(feature_indices))
+
+
+def get_light_colors(num_colors):
+    # Use a light palette from seaborn
+    palette = sns.color_palette("pastel", num_colors)
+    # Convert to hex colors
+    light_colors = [mcolors.rgb2hex(color) for color in palette]
+    return light_colors
+
+
+def replace_splits(dot_data, old_split="&le; 0.5", new_split="== 0"):
+    lines = dot_data.split('\n')
+    new_lines = []
+    for line in lines:
+        new_line = line.replace(old_split, new_split)
+        new_lines.append(new_line)
+    return '\n'.join(new_lines)
+
+
+def modify_dot_with_colors(dot_data, color_map, clf, node_color="#DDDDDD"):
+    lines = dot_data.split('\n')
+    new_lines = []
+    for line in lines:
+        match = re.match(r'(\d+) \[label=.*\]', line)
+        if match:
+            node_id = int(match.group(1))
+            if (clf.children_left[node_id] != _tree.TREE_LEAF or
+                clf.children_right[node_id] != _tree.TREE_LEAF):
+                # Node is not a leaf
+                color = node_color
+            else:
+                # Node is a leaf
+                node_class = clf.value[node_id].argmax()
+                color = color_map[node_class]
+            # Add fillcolor and style to the node definition
+            line = re.sub(r'(?<=>)\]',
+                          f', style="filled,rounded", fillcolor="{color}"]',
+                          line)
+        new_lines.append(line)
+    return '\n'.join(new_lines)
+
+def get_leaf_samples_and_features(tree, X):
+    """Group samples by their leaf nodes and extract feature indices used in decision paths."""
+    leaf_samples_indices = {}
+    leaf_features_per_path = {}
+    leaf_indices = tree.apply(X)
+
+    for leaf in np.unique(leaf_indices):
+        sample_indices = np.where(leaf_indices == leaf)[0]
+        leaf_samples_indices[leaf] = sample_indices
+        decision_path = tree.decision_path(X[sample_indices])
+        leaf_features_per_path[leaf] = decision_path.feature_indices[decision_path.feature_indptr[0]: decision_path.feature_indptr[1]]
+
+    return leaf_samples_indices, leaf_features_per_path
+
+def get_features_used_in_path(tree, X):
+    """Get the feature indices used in the decision path to each leaf node."""
+    decision_paths = tree.decision_path(X)
+    feature_indices = []
+
+
+    for sample_id in range(X.shape[0]):
+        path = decision_paths.indices[
+               decision_paths.indptr[sample_id]: decision_paths.indptr[
+                   sample_id + 1]
+               ]
+        features_in_path = np.unique([tree.tree.feature_index if tree.tree.feature_index != -2 else -1 for node_id in path]
+        )
+        feature_indices.append(features_in_path)
+
+    # Get unique feature indices across all paths for this leaf
+    unique_features = np.unique(np.concatenate(feature_indices))
+
+    return unique_features
+
+# def get_features_used_in_path(tree, X):
+#     """Get the feature indices used in the decision path to each leaf node."""
+#     decision_paths = tree.decision_path(X)
+#     feature_indices = []
+#
+#     for sample_id in range(X.shape[0]):
+#         path = decision_paths.indices[
+#                decision_paths.indptr[sample_id]: decision_paths.indptr[
+#                    sample_id + 1]
+#                ]
+#         features_in_path = np.unique(
+#             tree.tree_.feature[path][
+#                 tree.tree_.feature[path] != _tree.TREE_UNDEFINED]
+#         )
+#         feature_indices.append(features_in_path)
+#
+#     # Get unique feature indices across all paths for this leaf
+#     unique_features = np.unique(np.concatenate(feature_indices))
+#
+#     return unique_features
+
+def fit_trees_on_leaves(tree, X, y):
+    """Fit a new decision tree for the data at each leaf of the original tree."""
+    leaf_samples_indices, leaf_features = get_leaf_samples_and_features(tree, X)
+    leaf_trees = {}
+    for leaf, sample_indices in leaf_samples_indices.items():
+        X_leaf, y_leaf = X[sample_indices], y[sample_indices]
+        if len(np.unique(
+                y_leaf)) > 1:  # Ensure there is more than one class to fit a tree
+            new_tree = DecisionTreeClassifier(min_samples_leaf=1,
+                                              random_state=0)
+            new_tree.fit(X_leaf, y_leaf)
+            leaf_trees[leaf] = new_tree
+    return leaf_trees, leaf_features

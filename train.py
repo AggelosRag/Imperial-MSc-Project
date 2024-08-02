@@ -59,8 +59,14 @@ def main(config):
     print("Starting testing ...")
     logger.info("\n")
     logger.info("Training completed")
+
+    if config["trainer"]['type'] == 'IndependentCBMTrainer':
+        hard_cbm = config["trainer"]['hard_cbm']
+    else:
+        hard_cbm = False
+
     logger.info("Starting testing ...")
-    trainer.test(test_data_loader)
+    trainer.test(test_data_loader, hard_cbm=hard_cbm)
     print("\nTesting completed")
     logger.info("\n")
     logger.info("Testing completed")

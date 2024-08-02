@@ -1,15 +1,17 @@
 import pickle
 
+import graphviz
 import numpy as np
 import torch
 from sklearn.model_selection import train_test_split
+from sklearn.tree import DecisionTreeClassifier, export_graphviz
 from torch.utils.data import TensorDataset, DataLoader
 from torchvision import datasets, transforms
 from base import TwoBatchTripletDataLoader, TwoBatchDataLoader
 
 
 def get_mnist_dataLoader(data_dir='./datasets/parabola',
-                        type='Full-GD',
+                        type='SGD',
                         batch_size=None):
 
     # Download training and test sets

@@ -167,6 +167,7 @@ class XC_Epoch_Trainer(EpochTrainerBase):
     def _test(self, test_data_loader, hard_cbm=False):
 
         self.model.concept_predictor.eval()
+        #tensor_X = torch.FloatTensor().to(self.device)
         tensor_C_pred = torch.FloatTensor().to(self.device)
         tensor_y = torch.LongTensor().to(self.device)
 
@@ -184,6 +185,7 @@ class XC_Epoch_Trainer(EpochTrainerBase):
 
                     # Forward pass
                     C_pred = self.model.concept_predictor(X_batch)
+                    #tensor_X = torch.cat((tensor_X, X_batch), dim=0)
                     tensor_C_pred = torch.cat((tensor_C_pred, C_pred), dim=0)
                     tensor_y = torch.cat((tensor_y, y_batch), dim=0)
 
@@ -228,9 +230,62 @@ class XC_Epoch_Trainer(EpochTrainerBase):
         self.logger.info(f"Accuracy per Concept: {test_metrics['accuracy_per_concept']}")
 
         # if we use a hard-cbm, convert the predictions to binary
+        tensor_C_pred = torch.sigmoid(tensor_C_pred)
         if hard_cbm:
-            tensor_C_pred = torch.sigmoid(tensor_C_pred)
             tensor_C_pred[tensor_C_pred >= 0.5] = 1
             tensor_C_pred[tensor_C_pred < 0.5] = 0
 
+        # output_path = os.path.join(self.config.save_dir, "test_tensors")
+        # if not os.path.exists(output_path):
+        #     os.makedirs(output_path)
+        #
+        # tensor_X = tensor_X.cpu()
+        # tensor_C_pred = tensor_C_pred.cpu()
+        # tensor_y = tensor_y.cpu()
+        #
+        # torch.save(tensor_X, os.path.join(output_path, f"test_tensor_X.pt"))
+        # torch.save(tensor_C_pred, os.path.join(output_path, f"test_tensor_C_binarised.pt"))
+        # torch.save(tensor_y, os.path.join(output_path, f"test_tensor_y.pt"))
+        # print(f"\nSaved test tensors in {output_path}")
+
         return tensor_C_pred, tensor_y
+
+    def _predict(self, X=None, data_loader=None, use_data_loader=True):
+
+        if use_data_loader:
+            assert data_loader is not None and X is None
+        else:
+            assert data_loader is None and X is not None
+
+        self.model.concept_predictor.eval()
+
+        if use_data_loader:
+            tensor_C_pred = torch.FloatTensor().to(self.device)
+            tensor_y = torch.LongTensor().to(self.device)
+
+            with torch.no_grad():
+                with tqdm(total=len(data_loader), file=sys.stdout) as t:
+                    for batch_idx, (X_batch, C_batch, y_batch) in enumerate(data_loader):
+
+                        X_batch = X_batch.to(self.device)
+                        y_batch = y_batch.to(self.device)
+
+                        # Forward pass
+                        C_pred = self.model.concept_predictor(X_batch)
+                        tensor_C_pred = torch.cat((tensor_C_pred, C_pred), dim=0)
+                        tensor_y = torch.cat((tensor_y, y_batch), dim=0)
+
+                        t.set_postfix(
+                            batch_id='{0}'.format(batch_idx + 1))
+                        t.update()
+
+            # if we use a hard-cbm, convert the predictions to binary
+            tensor_C_pred = torch.sigmoid(tensor_C_pred)
+            return tensor_C_pred, tensor_y
+        else:
+            X = X.to(self.device)
+            with torch.no_grad():
+                C_pred = self.model.concept_predictor(X)
+
+            C_pred = torch.sigmoid(C_pred).cpu().numpy()
+            return C_pred

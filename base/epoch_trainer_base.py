@@ -1,23 +1,16 @@
 import os
-from io import StringIO
-import seaborn as sns
 
 import numpy as np
-import pydotplus
-import torch
-from matplotlib import pyplot as plt
-from IPython.core.display import Image
 import graphviz
 from sklearn.metrics import accuracy_score
 from sklearn.tree import DecisionTreeClassifier, export_graphviz
-from tqdm import tqdm
-import matplotlib.colors as mcolors
-import re
 
 from base import TrainerBase
 from experimentation.tree_comparison_utils import prune
 from networks.custom_decision_treeB import CustomDecisionTree, tree_to_dict, \
     export_tree
+from utils.tree_utils import get_light_colors, replace_splits, \
+    modify_dot_with_colors
 
 
 class EpochTrainerBase(TrainerBase):
@@ -30,7 +23,7 @@ class EpochTrainerBase(TrainerBase):
         self.config = config
         self.expert = expert
         # self.or_colors = list(mcolors.CSS4_COLORS.values())[:len(self.or_class_names)]
-        self.or_colors = self.get_light_colors(len(self.or_class_names))
+        self.or_colors = get_light_colors(len(self.or_class_names))
 
     def _train_epoch(self, epoch):
         raise NotImplementedError
@@ -118,8 +111,8 @@ class EpochTrainerBase(TrainerBase):
         # Image(graph.create_png())
 
         # Modify the dot data to include the specific colors
-        dot_data_with_colors = self.replace_splits(dot_data)
-        dot_data_with_colors = self.modify_dot_with_colors(
+        dot_data_with_colors = replace_splits(dot_data)
+        dot_data_with_colors = modify_dot_with_colors(
             dot_data_with_colors, self.reduced_colors_dict, tree.tree_
         )
         # Render the graph
@@ -169,43 +162,6 @@ class EpochTrainerBase(TrainerBase):
                                self.or_colors, self.or_class_names)
         graph = graphviz.Source(dot_data, directory=fig_path)
         graph.render(name, format="pdf", cleanup=True)
-
-    # Function to modify the exported dot file with colors
-    def modify_dot_with_colors(self, dot_data, color_map, clf):
-        lines = dot_data.split('\n')
-        new_lines = []
-        for line in lines:
-            match = re.match(r'(\d+) \[label=.*\]', line)
-            if match:
-                node_id = int(match.group(1))
-                threshold = clf.threshold[node_id]
-                if threshold == 0.5:
-                    color = "#DDDDDD"
-                else:
-                    node_class = clf.value[node_id].argmax()
-                    color = color_map[node_class]
-                # Add fillcolor and style to the node definition
-                line = re.sub(r'(?<=>)\]',
-                              f', style="filled,rounded", fillcolor="{color}"]',
-                              line)
-            new_lines.append(line)
-        return '\n'.join(new_lines)
-
-    def replace_splits(self, dot_data, old_split="&le; 0.5", new_split="== 0"):
-        lines = dot_data.split('\n')
-        new_lines = []
-        for line in lines:
-            new_line = line.replace(old_split, new_split)
-            new_lines.append(new_line)
-        return '\n'.join(new_lines)
-
-    # Define a function to generate light colors using seaborn
-    def get_light_colors(self, num_colors):
-        # Use a light palette from seaborn
-        palette = sns.color_palette("pastel", num_colors)
-        # Convert to hex colors
-        light_colors = [mcolors.rgb2hex(color) for color in palette]
-        return light_colors
 
     def _calculate_APL_gt(self, min_samples_leaf, C_pred, outputs):
 

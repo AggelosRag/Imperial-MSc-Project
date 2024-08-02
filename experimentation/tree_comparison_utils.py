@@ -445,6 +445,8 @@ def prune(tree):
         if can_prune(node):
             tree.children_left[node] = _tree.TREE_LEAF
             tree.children_right[node] = _tree.TREE_LEAF
+            tree.feature[node] = -2  # Set feature to undefined
+            tree.threshold[node] = -2.0  # Set threshold to undefined
 
     prune_nodes(0)
 

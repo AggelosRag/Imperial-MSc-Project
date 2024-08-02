@@ -27,19 +27,19 @@ def get_cub_dataLoader(data_dir='./datasets/parabola',
                                  batch_size=batch_size,
                                  uncertain_label=False, image_dir=str(CUB_DATA_DIR),
                                  resol=224, normalizer=normalizer,
-                                 n_classes=num_classes, resampling=True)
+                                 n_classes=num_classes, resampling=False)
 
     val_loader = load_cub_data([VAL_PKL], use_attr=True, no_img=False,
                                  batch_size=batch_size,
                                  uncertain_label=False, image_dir=str(CUB_DATA_DIR),
                                  resol=224, normalizer=normalizer,
-                                 n_classes=num_classes, resampling=True)
+                                 n_classes=num_classes, resampling=False)
 
     test_loader = load_cub_data([TEST_PKL], use_attr=True, no_img=False,
                                 batch_size=batch_size,
                                 uncertain_label=False, image_dir=str(CUB_DATA_DIR),
                                 resol=224, normalizer=normalizer,
-                                n_classes=num_classes, resampling=True)
+                                n_classes=num_classes, resampling=False)
 
     classes = open(os.path.join(CUB_DATA_DIR, "classes.txt")).readlines()
     classes = [a.split(".")[1].strip() for a in classes]

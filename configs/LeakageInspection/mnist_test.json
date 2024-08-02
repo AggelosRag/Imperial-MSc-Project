@@ -1,16 +1,17 @@
 {
-    "name": "cbm_mnist_L2_0_ind_bs=206",
+    "name": "leakage_inspection",
     "n_gpu": 1,
 
     "arch": {
-        "type": "MNISTCBMArchitecture",
+        "type": "MNISTCBMwithDTaslabelPredictorArchitecture",
         "args": {}
     },
     "model": {
         "xc_lr": 0.001,
         "xc_weight_decay": 0,
         "cy_lr": 0.001,
-        "cy_weight_decay": 0
+        "cy_weight_decay": 0,
+        "pretrained_concept_predictor":
     },
     "dataset": {
         "num_classes": 3,
@@ -30,11 +31,11 @@
         }
     },
     "trainer": {
-        "type": "IndependentCBMTrainer",
-        "cbm_type": "hard",
+        "type": "LeakageInspectionTrainer",
+        "hard_cbm": true,
         "args": {},
-        "xc_epochs": 15,
-        "cy_epochs": 15,
+        "xc_epochs": 30,
+        "cy_epochs": 100,
         "save_dir": "saved/",
         "save_period": 1000,
         "verbosity": 2,

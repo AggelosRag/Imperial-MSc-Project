@@ -32,6 +32,7 @@
     },
     "trainer": {
         "type": "IndependentCBMTrainer",
+        "cbm_type": "hard",
         "args": {},
         "xc_epochs": 100,
         "cy_epochs": 500,

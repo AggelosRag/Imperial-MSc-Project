@@ -34,6 +34,7 @@ class CYLogger:
         y_all_val = self.val_loader.dataset[:][1]
         self.class_counts_train = count_labels_per_class(y_all_train)
         self.class_counts_val = count_labels_per_class(y_all_val)
+        print("Class counts in val data: ",  self.class_counts_val)
 
         self.run_id = 0
         self.run_data = []

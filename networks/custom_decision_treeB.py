@@ -167,8 +167,8 @@ def export_tree(tree, feature_names, class_colors, class_names):
     import matplotlib.colors as mcolors
 
     # Define the colors for different conditions
-    light_grey = "#DDDDDD"  # Light green color
-    light_yellow = "#F7F7F7"  # Light red color
+    light_grey = "#DDDDDD"  # Grey color
+    light_yellow = "#F7F7F7"  # Light grey color
 
     dot_data = ["digraph Tree {"]
     dot_data.append(
@@ -183,7 +183,7 @@ def export_tree(tree, feature_names, class_colors, class_names):
                 threshold_str = "== 0"
                 fillcolor = light_grey
             else:
-                threshold_str = f"<= {threshold:.2f}"
+                threshold_str = f"<= {threshold:.5f}"
                 fillcolor = light_yellow
 
             dot_data.append(

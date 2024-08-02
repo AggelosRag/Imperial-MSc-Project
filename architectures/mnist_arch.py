@@ -4,8 +4,36 @@ import torch
 import numpy as np
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
 
+from experimentation.dts_per_decision_path_of_dt_without_scikit import \
+    CustomDecisionTree
 from model.loss import SelectiveNetLoss, CELoss
 
+
+class MNISTCBMwithDTaslabelPredictorArchitecture:
+    def __init__(self, config, device, hard_concepts=None):
+
+        if hard_concepts is None:
+            self.hard_concepts = []
+        else:
+            self.hard_concepts = hard_concepts
+
+        concept_size = config["dataset"]["num_concepts"] - len(self.hard_concepts)
+        self.concept_predictor = ConceptPredictor(config["dataset"]["num_concepts"])
+        # self.label_predictor = DecisionTreeClassifier(min_samples_leaf=config["regularisation"]["min_samples_leaf"])
+        self.label_predictor = CustomDecisionTree(min_samples_leaf=config["regularisation"]["min_samples_leaf"],
+                                                  n_classes=config["dataset"]["num_classes"])
+        self.model = MainNetwork(self.concept_predictor, self.label_predictor)
+
+        # Define loss functions and optimizers
+        self.criterion_concept = torch.nn.BCEWithLogitsLoss()
+        self.criterion_per_concept = nn.BCEWithLogitsLoss(reduction='none')
+
+        xc_params_to_update = [
+            {'params': self.model.concept_predictor.parameters(), 'weight_decay': config["model"]['xc_weight_decay']},
+        ]
+        self.xc_optimizer = torch.optim.Adam(xc_params_to_update, lr=config["model"]['xc_lr'])
+        self.cy_optimizer = None
+        self.lr_scheduler = None
 
 class MNISTCBMTreeArchitecture:
     def __init__(self, config, device, hard_concepts=None):
@@ -77,11 +105,6 @@ class MNISTCBMArchitecture:
                                               lr=config["model"]['lr'])
 
         self.lr_scheduler = None
-
-    def scale_concept_weights(self, feature_importances):
-        # scale the concept weights by the inverse of the feature importances
-        self.concept_weights = torch.tensor(1 / (np.array(feature_importances) + 0.1))
-        # self.concept_weights = torch.tensor((np.array(feature_importances) * 10))
 
 class MNISTCBMSelectiveNetArchitecture:
     def __init__(self, config, device, hard_concepts=None):

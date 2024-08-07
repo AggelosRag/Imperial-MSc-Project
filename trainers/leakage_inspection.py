@@ -7,16 +7,11 @@ import torch.utils.data
 from matplotlib import pyplot as plt
 import graphviz
 from sklearn.metrics import accuracy_score
-from sklearn.tree import export_graphviz
 
 from epoch_trainers.xc_epoch_trainer import XC_Epoch_Trainer
-from epoch_trainers.cy_epoch_trainer import CY_Epoch_Trainer
-from epoch_trainers.cy_epoch_tree_trainer import CY_Epoch_Tree_Trainer
-from experimentation.dts_per_decision_path_of_dt_without_scikit import \
+from networks.custom_dt_gini_with_entropy_metrics import \
     build_combined_tree, CustomDecisionTree
-from experimentation.tree_comparison_utils import prune
-from utils.tree_utils import replace_splits, modify_dot_with_colors, \
-    get_light_colors, get_leaf_samples_and_features
+from utils.tree_utils import get_light_colors, get_leaf_samples_and_features
 
 
 class LeakageInspectionTrainer:
@@ -115,8 +110,9 @@ class LeakageInspectionTrainer:
             X_leaf = self.data_loader.dataset[:][0][sample_indices]
             y_original_pred = original_tree.predict(C_leaf)
             C_leaf_pred = self.xc_epoch_trainer._predict(X=X_leaf, use_data_loader=False)
-            hard_concepts = C_leaf[:, leaf_features_per_path[leaf]]
-            C_leaf_pred[:, leaf_features_per_path[leaf]] = hard_concepts
+            leaf_features_not_used = list(set(range(self.num_concepts)) - set(leaf_features_per_path[leaf]))
+            hard_concepts = C_leaf[:, leaf_features_not_used]
+            C_leaf_pred[:, leaf_features_not_used] = hard_concepts
             print(f"\nTraining soft c->y DT label predictor for leaf: {leaf}")
             logger.info(f"\nTraining soft c->y DT label predictor for leaf: {leaf}")
             tree = CustomDecisionTree(
@@ -175,8 +171,9 @@ class LeakageInspectionTrainer:
             X_leaf_val = self.valid_data_loader.dataset[:][0][sample_indices]
             y_original_pred = original_tree.predict(C_leaf_val)
             C_leaf_val_pred = self.xc_epoch_trainer._predict(X=X_leaf_val, use_data_loader=False)
-            hard_concepts = C_leaf_val[:, leaf_features_per_path_val[leaf]]
-            C_leaf_val_pred[:, leaf_features_per_path_val[leaf]] = hard_concepts
+            leaf_features_not_used_val = list(set(range(self.num_concepts)) - set(leaf_features_per_path_val[leaf]))
+            hard_concepts = C_leaf_val[:, leaf_features_not_used_val]
+            C_leaf_val_pred[:, leaf_features_not_used_val] = hard_concepts
             tree = self.leaf_trees[leaf]
             y_pred = tree.predict(C_leaf_val_pred)
             print(f"\nValidating for leaf: {leaf}")
@@ -216,18 +213,23 @@ class LeakageInspectionTrainer:
             y_pred_dict = {}
             X_leaf_dict = {}
 
+        accuracy_per_original_path_dict = {}
+        accuracy_per_new_path_dict = {}
         for leaf, sample_indices in leaf_samples_indices.items():
             C_leaf, y_leaf = tensor_C_binary_pred[sample_indices], tensor_y[sample_indices]
             X_leaf = test_data_loader.dataset[:][0][sample_indices]
             y_original_pred = self.arch.label_predictor.predict(C_leaf)
             C_leaf_pred = self.xc_epoch_trainer._predict(X=X_leaf, use_data_loader=False)
-            hard_concepts = C_leaf[:, leaf_features_per_path[leaf]]
-            C_leaf_pred[:, leaf_features_per_path[leaf]] = hard_concepts
+            leaf_features_not_used = list(set(range(self.num_concepts)) - set(leaf_features_per_path[leaf]))
+            hard_concepts = C_leaf[:, leaf_features_not_used]
+            C_leaf_pred[:, leaf_features_not_used] = hard_concepts
             tree = self.leaf_trees[leaf]
             y_pred = tree.predict(C_leaf_pred)
             print(f"\nTesting for leaf: {leaf}")
             print(f'Test Accuracy of the original path: {accuracy_score(y_leaf, y_original_pred)}')
             print(f'Test Accuracy of the new path: {accuracy_score(y_leaf, y_pred)}')
+            accuracy_per_original_path_dict[leaf] = accuracy_score(y_leaf, y_original_pred)
+            accuracy_per_new_path_dict[leaf] = accuracy_score(y_leaf, y_pred)
 
             if save_dicts:
                 new_leaves_per_leaf_samples_indices[leaf], new_leaves_per_leaf_features_per_path[leaf] =\
@@ -265,6 +267,13 @@ class LeakageInspectionTrainer:
                 pkl.dump(y_pred_dict, f)
             with open(os.path.join(output_path, 'X_leaf_dict.pkl'), 'wb') as f:
                 pkl.dump(X_leaf_dict, f)
+
+        with open(os.path.join(self.config.save_dir, 'accuracy_per_original_path_dict.pkl'), 'wb') as f:
+            pkl.dump(accuracy_per_original_path_dict, f)
+        with open(os.path.join(self.config.save_dir, 'accuracy_per_new_path_dict.pkl'), 'wb') as f:
+            pkl.dump(accuracy_per_new_path_dict, f)
+        with open(os.path.join(self.config.save_dir, 'leaf_samples_indices.pkl'), 'wb') as f:
+            pkl.dump(leaf_samples_indices, f)
 
         C_leaf_pred, tensor_y = self.xc_epoch_trainer._predict(data_loader=test_data_loader, use_data_loader=True)
         C_leaf_pred = C_leaf_pred.detach().cpu().numpy()

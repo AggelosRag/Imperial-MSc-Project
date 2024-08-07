@@ -105,6 +105,8 @@ data/
 input/
 saved/
 datasets/
+logs_and_models_to_show/
+experimentation/
 
 # editor, os cache directory
 .vscode/

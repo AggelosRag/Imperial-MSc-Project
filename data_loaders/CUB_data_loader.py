@@ -6,7 +6,6 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader,TensorDataset
 from torchvision import datasets, transforms
-from base import TwoBatchTripletDataLoader, TwoBatchDataLoader
 from PIL import Image
 from torch.utils.data import BatchSampler
 
@@ -133,6 +132,27 @@ def find_class_imbalance(pkl_file, multiple_attr=False, attr_idx=-1):
     if not multiple_attr: #e.g. [9.0] --> [9.0] * 312
         imbalance_ratio *= n_attr
     return imbalance_ratio
+
+def find_class_imbalance_mnist(C):
+    """
+    Calculate class imbalance ratio for binary attribute labels
+    """
+    C = C.numpy()
+    imbalance_ratio = []
+    n = C.shape[0]
+    n_attr = C.shape[1]
+
+    n_ones = [0] * n_attr
+    total = [n] * n_attr
+    for i in range(n):
+        labels = C[i, :]
+        for i in range(n_attr):
+            n_ones[i] += labels[i]
+    for j in range(len(n_ones)):
+        imbalance_ratio.append(total[j]/n_ones[j] - 1)
+
+    return imbalance_ratio
+
 
 class CUBDataset(Dataset):
     """

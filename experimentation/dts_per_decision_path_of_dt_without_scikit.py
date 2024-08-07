@@ -212,7 +212,8 @@ class CustomDecisionTree:
                 threshold = node.threshold
                 # Handle the special case for fixed splits
                 if threshold == 0.5:
-                    threshold_str = "== 0"
+                    #threshold_str = "== 0"
+                    threshold_str = f"<= {self._custom_print(threshold)}"
                     fillcolor = light_grey
                 else:
                     threshold_str = f"<= {self._custom_print(threshold)}"
@@ -453,7 +454,7 @@ class CustomDecisionTree:
             f.write("\n".join(dot_data))
 
         graph = graphviz.Source("\n".join(dot_data))
-        graph.render(filename=file_name, format='png', cleanup=True)
+        graph.render(filename=file_name, format='pdf', cleanup=True)
 
 
 def build_combined_tree(original_tree, leaf_trees, X, y):

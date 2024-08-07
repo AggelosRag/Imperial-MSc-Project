@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from torch.utils.data import TensorDataset, DataLoader
 
-from base import TwoBatchDataLoader
+#from base import TwoBatchDataLoader
 
 
 def get_parabola_dataLoader(ratio=0.2,

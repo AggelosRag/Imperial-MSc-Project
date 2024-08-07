@@ -1,280 +1,14 @@
 import re
-
 import numpy as np
 import seaborn as sns
 import matplotlib.colors as mcolors
+import hashlib
+import graphviz
+from matplotlib import pyplot as plt
+from sklearn.inspection import PartialDependenceDisplay
+from sklearn.metrics import accuracy_score
+from sklearn.tree import export_graphviz, DecisionTreeClassifier,  _tree
 
-from matplotlib import colors
-from sklearn.tree import DecisionTreeClassifier, _tree
-import copy
-
-DEFAULT_FEATURE = -2
-DEFAULT_IMPURITY = 0
-DEFAULT_THRESHOLD = -2
-DEFAULT_LEAF = -1
-
-def gen_blob_map(children_left, children_right):
-    unique_node_i = np.sort(
-        list(
-            set(np.concatenate((children_left, children_right))) -
-            set([DEFAULT_LEAF])
-        )
-    )
-    blob_map = dict(zip(unique_node_i, [k+1 for k in range(unique_node_i.size)]))
-    blob_map[DEFAULT_LEAF] = DEFAULT_LEAF
-    return blob_map
-
-
-def prune_order(tree):
-    r"""Sort nodes by depth and ignore all leaves since
-    pruning a leaf node is equivalent to adding it back.
-    """
-    node_depth = np.zeros(shape=tree.tree_.node_count)
-    is_leaves = np.zeros(shape=tree.tree_.node_count, dtype=bool)
-    stack = [(0, -1)]  # seed is the root node id and its parent depth
-    while len(stack) > 0:
-        node_id, parent_depth = stack.pop()
-        node_depth[node_id] = parent_depth + 1
-
-        # If we have a test node
-        if (tree.tree_.children_left[node_id] != tree.tree_.children_right[node_id]):
-            stack.append((tree.tree_.children_left[node_id], parent_depth + 1))
-            stack.append((tree.tree_.children_right[node_id], parent_depth + 1))
-        else:
-            is_leaves[node_id] = True
-
-    # get non-leaves + sort by depth
-    ii = np.where(~is_leaves)[0]
-    prune_order = ii[np.argsort(node_depth[ii])[::-1]].tolist()
-    return prune_order
-
-def _dfs_sklearn_tree(tree, i, order='post'):
-    """Depth first search across scikit-learn arrays
-    """
-    left_order = []
-    right_order = []
-    root = []
-    if tree.tree_.children_left[i] != -1:
-        left_order = _dfs_sklearn_tree(tree, tree.tree_.children_left[i], order=order)
-    if tree.tree_.children_right[i] != -1:
-        right_order = _dfs_sklearn_tree(tree, tree.tree_.children_right[i], order=order)
-    if i != -1:
-        root.append(i)
-
-    if order == 'pre':
-        return root + left_order + right_order
-    elif order == 'in':
-        return left_order + root + right_order
-    elif order == 'post':
-        return left_order + right_order + root
-    else:
-        raise Exception('unknown order "{}" provided')
-
-def replace_sub_tree_with_leaf(tree, i):
-    """Create a new tree that is identical to tree except the sub-tree
-    rooted at (i) is replaced with a node that returns the majority class.
-    """
-    tree2 = copy.deepcopy(tree)  # don't change original tree
-    # we are going to replace the current node with a leaf node
-    # so we can ignore all its children
-    black_list = (
-        _dfs_sklearn_tree(tree2,
-                          tree2.tree_.children_left[i],
-                          order='pre') +
-        _dfs_sklearn_tree(tree2,
-                          tree2.tree_.children_right[i],
-                          order='pre')
-    )
-    # remaining nodes must be preserved
-    white_list = list(set(range(tree2.tree_.capacity)) - set(black_list))
-    cur_node_i = white_list.index(i)
-    # store left 1/2 of tree and replace current node with -1 (no left children)
-    children_left = tree2.tree_.children_left[white_list]
-    children_left[cur_node_i] = DEFAULT_LEAF
-    # store right 1/2 of tree and replace current node with -1 (no right children)
-    children_right = tree2.tree_.children_right[white_list]
-    children_right[cur_node_i] = DEFAULT_LEAF
-    # store features and replace current node with -2
-    feature = tree2.tree_.feature[white_list]
-    feature[cur_node_i] = DEFAULT_FEATURE
-    # store impurities and replace current node with 0
-    impurity = tree2.tree_.impurity[white_list]
-    impurity[cur_node_i] = DEFAULT_IMPURITY
-    # store values in array
-    sub_tree_values = tree2.tree_.value[i]
-    # do the same for node_samples and weighted_node_samples
-    n_node_samples = tree2.tree_.n_node_samples[white_list]
-    n_node_samples[cur_node_i] = max(np.sum(tree2.tree_.value[i], axis=1))
-    weighted_n_node_samples = tree2.tree_.weighted_n_node_samples[white_list]
-    weighted_n_node_samples[cur_node_i] = n_node_samples[cur_node_i]
-    # store thresholds and replace current node with -1
-    threshold = tree2.tree_.threshold[white_list]
-    threshold[cur_node_i] = DEFAULT_THRESHOLD
-    # node_count = remaining number of nodes
-    node_count = len(white_list)
-    capacity = node_count
-    n_classes = max(tree2.tree_.n_classes)
-    n_output = len(tree2.tree_.n_classes)
-    # replace value with max of new leaf's values (aka make a leaf)
-    value = tree2.tree_.value[white_list, :, :]
-    _value = np.zeros((n_output, n_classes))
-    for ii in range(n_output):
-        _value[
-            ii, np.argmax(sub_tree_values, axis=1)[ii]
-        ] = np.sum(tree2.tree_.value[i][ii])
-    value[cur_node_i, :, :] = _value
-    # we need to remap the nodes
-    index_remap = gen_blob_map(children_left, children_right)
-    # set tree objects!
-    tree2.tree_.node_count = node_count
-    tree2.tree_.capacity = capacity
-    delta = value[cur_node_i, :, :] - tree2.tree_.value[i, :, :]
-
-    for ii in range(node_count):
-        tree2.tree_.children_left[ii] = index_remap[children_left[ii]]
-        tree2.tree_.children_right[ii] = index_remap[children_right[ii]]
-        tree2.tree_.feature[ii] = feature[ii]
-        tree2.tree_.impurity[ii] = impurity[ii]
-        tree2.tree_.n_node_samples[ii] = n_node_samples[ii]
-        tree2.tree_.weighted_n_node_samples[ii] = weighted_n_node_samples[ii]
-        tree2.tree_.threshold[ii] = threshold[ii]
-        tree2.tree_.value[ii, :, :] = value[ii, :, :]
-    update_node_value(tree2, delta, i)
-    return tree2, index_remap
-
-
-def reduced_error_prune(tree, X_validation, y_validation):
-    r"""Reduced Error Pruning (simplest one)
-    https://en.wikipedia.org/wiki/Pruning_%28decision_trees%29
-    Arguments
-    ---------
-    tree: trained scikit-learn Decision Tree instance
-    X_validation: validation set inputs
-    y_validation: validation set outputs
-    Starting a leaves, each node is replaced with most
-    popular class. If prediction accuracy is not affected,
-    keep the change.
-    """
-    base_tree = copy.deepcopy(tree)
-    base_score = base_tree.score(X_validation, y_validation)
-    node_order = prune_order(base_tree)
-    num_nodes_to_prune = len(node_order)
-    blob_map = gen_blob_map(base_tree.tree_.children_left,
-                            base_tree.tree_.children_right)
-
-    for i in range(num_nodes_to_prune):
-        node_i = node_order[i]
-        new_tree, blob_map = replace_sub_tree_with_leaf(base_tree, node_i)
-        new_score = new_tree.score(X_validation, y_validation)
-
-        if new_score >= base_score:
-            base_tree = copy.deepcopy(new_tree)
-            base_score = new_score
-            # node order changes as blobs get renamed
-            node_order = [blob_map[x] if x in blob_map else x for x in node_order]
-
-    return base_tree
-
-
-def get_path_length(data, predictions, strategy='tree',
-                    n_trees=100, min_samples_leaf=1, size_sum=True):
-    r"""Compute the average options length over the training dataset.
-
-    @param data: torch.Tensor
-                 size: n_data x n_input_features
-    @param predictions: torch.Tensor
-                        size: n_data x n_output_features
-                        (these are floats, not rounded)
-    @param strategy: string [default: tree]
-                     tree|forest
-    @param min_samples_leaf: integer [default: 1]
-                             number of samples to define a leaf node
-    @param n_trees: integer [default: 100]
-                    number of trees in a random forest
-                    (this only does something if strategy='forest')
-    @param size_sum: boolean [default: True]
-
-    @return: float
-             average path lengths from a decision tree
-    """
-    if len(data) == 0:  # given empty inputs
-        return 0
-
-    data = data.cpu().data.numpy()
-    predictions = predictions.cpu().data.numpy()
-    predictions = np.rint(predictions).astype(int)
-
-    if predictions.ndim == 1:
-        predictions = predictions[:, np.newaxis]
-
-    path_length = []
-    for i in range(predictions.shape[1]):
-        if strategy == 'tree':
-            clf = DecisionTreeClassifier(min_samples_leaf=min_samples_leaf)
-
-        clf.fit(data, predictions[:, i])
-        path_length.append(average_path_length(clf, data))
-
-    path_length = np.array(path_length)
-    if size_sum:
-        path_length = np.sum(path_length)
-
-    return path_length
-
-
-def average_path_length(tree, X):
-    r"""Compute average path length: cost of simulating the average
-    example; this is used in the objective function.
-
-    @param tree: DecisionTreeClassifier instance
-    @param X: NumPy array (D x N)
-              D := number of dimensions
-              N := number of examples
-    @return path_length: float
-                         average path length
-    """
-    leaf_indices = tree.apply(X)
-    leaf_counts = np.bincount(leaf_indices)
-    leaf_depths = get_node_depths(tree.tree_)
-    path_length = np.dot(leaf_depths, leaf_counts) / float(X.shape[0])
-
-    return path_length
-
-
-def get_node_depths(tree):
-    r"""Get the node depths of the decision tree
-
-    @param tree: DecisionTreeClassifier instance
-    @return depths: np.array
-
-    >>> d = DecisionTreeClassifier()
-    >>> d.fit([[1,2,3],[4,5,6],[7,8,9]], [1,2,3])
-    >>> get_node_depths(d.tree_)
-        array([0, 1, 1, 2, 2])
-    """
-    def get_node_depths_(current_node, current_depth, l, r, depths):
-        depths += [current_depth]
-        if l[current_node] != -1 and r[current_node] != -1:
-            get_node_depths_(l[current_node], current_depth + 1, l, r, depths)
-            get_node_depths_(r[current_node], current_depth + 1, l, r, depths)
-
-    depths = []
-    get_node_depths_(0, 0, tree.children_left, tree.children_right, depths)
-    return np.array(depths)
-
-def update_node_value(tree, delta, node_i):
-    children_left = tree.tree_.children_left
-    children_right = tree.tree_.children_right
-    parent_left = np.where(children_left == node_i)[0]
-    parent_right = np.where(children_right == node_i)[0]
-
-    if len(parent_left) > 0:
-        tree.tree_.value[parent_left] += delta
-        update_node_value(tree, delta, parent_left)
-
-    if len(parent_right) > 0:
-        tree.tree_.value[parent_right] += delta
-        update_node_value(tree, delta, parent_right)
 
 def extract_features_from_splits(tree):
     feature_indices = set()
@@ -396,3 +130,464 @@ def fit_trees_on_leaves(tree, X, y):
             new_tree.fit(X_leaf, y_leaf)
             leaf_trees[leaf] = new_tree
     return leaf_trees, leaf_features
+
+
+def compute_structural_similarity(tree1, tree2):
+    depth1 = tree1.get_depth()
+    depth2 = tree2.get_depth()
+    num_nodes1 = tree1.tree_.node_count
+    num_nodes2 = tree2.tree_.node_count
+
+    # Node splits comparison
+    splits1 = tree1.tree_.threshold
+    splits2 = tree2.tree_.threshold
+    splits_similarity = np.mean(splits1 == splits2)
+
+    # Compare splitting criteria of internal nodes (features and thresholds)
+    tree1_nodes = tree1.tree_
+    tree2_nodes = tree2.tree_
+
+    split_features1 = tree1_nodes.feature[tree1_nodes.feature >= 0]
+    split_features2 = tree2_nodes.feature[tree2_nodes.feature >= 0]
+
+    split_thresholds1 = tree1_nodes.threshold[tree1_nodes.feature >= 0]
+    split_thresholds2 = tree2_nodes.threshold[tree2_nodes.feature >= 0]
+
+    feature_similarity = np.mean(split_features1 == split_features2)
+    threshold_similarity = np.mean(
+        np.isclose(split_thresholds1, split_thresholds2, atol=1e-4))
+
+    structural_similarity = {
+        'depth_difference': abs(depth1 - depth2),
+        'num_nodes_difference': abs(num_nodes1 - num_nodes2),
+        'splits_similarity': splits_similarity,
+        'feature_similarity': feature_similarity,
+        'threshold_similarity': threshold_similarity
+    }
+
+    return structural_similarity
+
+
+def compare_feature_importances(tree1, tree2, feature_names):
+    importances1 = tree1.feature_importances_
+    importances2 = tree2.feature_importances_
+
+    plt.figure(figsize=(10, 6))
+    indices = np.arange(len(feature_names))
+    width = 0.35
+    plt.bar(indices - width/2, importances1, width, label='Tree 1')
+    plt.bar(indices + width/2, importances2, width, label='Tree 2')
+    plt.xticks(indices, feature_names, rotation=90)
+    plt.ylabel('Feature Importance')
+    plt.title('Comparison of Feature Importances')
+    plt.legend(loc='best')
+    plt.show()
+
+
+def plot_partial_dependence_trees(tree1, tree2, X, feature_names, target=0):
+    fig, ax = plt.subplots(2, len(feature_names), figsize=(15, 6), sharey=True)
+    for i, feature in enumerate(feature_names):
+        PartialDependenceDisplay.from_estimator(tree1, X, [i], target=target, ax=ax[0, i], feature_names=feature_names, grid_resolution=50)
+        PartialDependenceDisplay.from_estimator(tree2, X, [i], target=target, ax=ax[1, i], feature_names=feature_names, grid_resolution=50)
+    ax[0, 0].set_ylabel('Tree 1')
+    ax[1, 0].set_ylabel('Tree 2')
+    plt.suptitle('Partial Dependence Plots')
+    plt.show()
+
+
+def compute_semantic_similarity(tree1, tree2, X):
+    leaf_ids1 = tree1.apply(X)
+    leaf_ids2 = tree2.apply(X)
+
+    # Leaf node distribution
+    unique_leaf_ids1, counts1 = np.unique(leaf_ids1, return_counts=True)
+    unique_leaf_ids2, counts2 = np.unique(leaf_ids2, return_counts=True)
+
+    leaf_dist1 = dict(zip(unique_leaf_ids1, counts1))
+    leaf_dist2 = dict(zip(unique_leaf_ids2, counts2))
+
+    common_leaves = set(leaf_dist1.keys()).intersection(set(leaf_dist2.keys()))
+    leaf_similarity = sum(min(leaf_dist1[leaf], leaf_dist2[leaf]) for leaf in
+                          common_leaves) / min(sum(counts1), sum(counts2))
+
+    # Path similarity
+    paths1 = [tree1.decision_path([x]).toarray() for x in X]
+    paths2 = [tree2.decision_path([x]).toarray() for x in X]
+    path_similarity = np.mean(
+        [np.array_equal(p1, p2) for p1, p2 in zip(paths1, paths2)])
+
+    semantic_similarity = {
+        'leaf_similarity': leaf_similarity,
+        'path_similarity': path_similarity
+    }
+
+    return semantic_similarity
+
+
+def serialize_tree(tree):
+    # Serialize the tree structure and node values
+    return hashlib.md5(tree.tree_.__getstate__()['nodes'].tobytes()).hexdigest()
+
+
+def extract_paths_and_counts(tree, X, y, feature_names):
+    paths = []
+    path_counts = []
+    path_classifications = []
+    path_indices = []
+
+    def traverse(node, path, indices):
+        if tree.children_left[node] == tree.children_right[node]:  # leaf
+            paths.append(path)
+            path_counts.append(len(indices))
+            path_classifications.append(np.bincount(y[indices]).argmax())
+            path_indices.append(indices)
+            return
+        feature = feature_names[tree.feature[node]]
+        threshold = tree.threshold[node]
+        left_indices = indices[X[indices, tree.feature[node]] <= threshold]
+        right_indices = indices[X[indices, tree.feature[node]] > threshold]
+        left_path = path + [(feature, "<=", threshold)]
+        right_path = path + [(feature, ">", threshold)]
+        traverse(tree.children_left[node], left_path, left_indices)
+        traverse(tree.children_right[node], right_path, right_indices)
+
+    traverse(0, [], np.arange(X.shape[0]))
+    return paths, path_counts, path_classifications, path_indices
+
+def calculate_accuracy_per_path(path_indices, y, path_classifications):
+    accuracies = []
+    for indices, classification in zip(path_indices, path_classifications):
+        if len(indices) > 0:
+            accuracy = np.mean(np.array(y[indices] == classification))
+            accuracies.append(accuracy)
+        else:
+            accuracies.append(0.0)
+    return accuracies
+
+def print_paths_with_data(paths, path_counts, path_classifications, path_indices, accuracies):
+    for path, count, classification, indices, accuracy in zip(paths, path_counts, path_classifications, path_indices, accuracies):
+        path_str = " AND ".join([f"{feature} {op} {threshold:.2f}" for feature, op, threshold in path])
+        print(f"Path: {path_str}")
+        print(f"Data indices: {indices}")
+        print(f"Count: {count}")
+        print(f"Classification: {classification}")
+        print(f"Accuracy: {accuracy:.4f}\n")
+
+def merge_conditions(path):
+    condition_dict = {}
+    for feature, op, threshold in path:
+        if feature not in condition_dict:
+            condition_dict[feature] = [None, None]  # [lower_bound, upper_bound]
+        if op == "<=":
+            condition_dict[feature][1] = threshold
+        elif op == ">":
+            condition_dict[feature][0] = threshold
+
+    merged_path = []
+    for feature, (lower, upper) in condition_dict.items():
+        if lower is not None and upper is not None:
+            merged_path.append((feature, "in", (lower, upper)))
+        elif lower is not None:
+            merged_path.append((feature, ">", lower))
+        elif upper is not None:
+            merged_path.append((feature, "<=", upper))
+    return merged_path
+
+
+def rename_binary_conditions(path):
+    renamed_path = []
+    for feature, op, threshold in path:
+        if threshold == 0.5:
+            if op == "<=":
+                renamed_path.append((feature, "=", 0))
+            elif op == ">":
+                renamed_path.append((feature, "=", 1))
+        else:
+            renamed_path.append((feature, op, threshold))
+    return renamed_path
+
+
+def export_tree_graphviz(tree, feature_names, class_names, file_name):
+    dot_data = export_graphviz(
+        tree,
+        out_file=None,
+        feature_names=feature_names,
+        class_names=class_names,
+        filled=True,
+        rounded=True,
+        special_characters=True
+    )
+    graph = graphviz.Source(dot_data)
+    graph.render(file_name)
+    return graph
+
+
+def calculate_path_similarity(binary_path, prob_path):
+    shared_features = set(f for f, op, t in binary_path) & set(
+        f for f, op, t in prob_path)
+    total_similarity = 0
+    total_shared_nodes = 0
+
+    for feature in shared_features:
+        binary_thresholds = [t for f, op, t in binary_path if f == feature]
+        prob_thresholds = [t for f, op, t in prob_path if f == feature]
+
+        for bt in binary_thresholds:
+            for pt in prob_thresholds:
+                if isinstance(bt, tuple) and isinstance(pt, tuple):
+                    if bt[0] <= pt[0] or bt[1] >= pt[1]:
+                        similarity = 1 - abs(bt[0] - pt[1])
+                    else:
+                        similarity = 1 - abs(bt[1] - pt[0])
+                elif isinstance(pt, tuple):
+                    if bt <= pt[0]:
+                        similarity = 1 - abs(bt - pt[0])
+                    else:
+                        similarity = 1 - abs(bt - pt[1])
+                elif isinstance(bt, tuple):
+                    if pt <= bt[0]:
+                        similarity = 1 - abs(pt - bt[0])
+                    else:
+                        similarity = 1 - abs(pt - bt[1])
+                else:
+                    similarity = 1 - abs(bt - pt)
+
+                total_similarity += similarity
+                total_shared_nodes += 1
+
+    return total_similarity / total_shared_nodes if total_shared_nodes > 0 else 0
+
+
+def print_loaded_matching_pairs(loaded_matching_pairs, class_names):
+    if not loaded_matching_pairs:
+        print("No matching pairs found.")
+        return
+
+    print(f"\nMatching paths and similarities for binary paths = 1:")
+    for entry in loaded_matching_pairs["binary_paths_1"]:
+        binary_path = entry["binary_path"]
+        binary_count = entry["binary_count"]
+        binary_classification = entry["binary_classification"]
+        print(
+            f"Binary Path: IF {' AND '.join([f'{feature} {op} {threshold}' for feature, op, threshold in binary_path])} -> | Count: {binary_count} | Classification: {binary_classification}")
+
+        for prob_path, prob_count, prob_class, similarity in entry[
+            "prob_paths"]:
+            print(
+                f"  Prob Path: IF {' AND '.join([f'{feature} {op} [{threshold[0]:.2f}, {threshold[1]:.2f}]' if op == 'in' else f'{feature} {op} {threshold:.2f}' for feature, op, threshold in prob_path])} -> | Count: {prob_count} | Classification: {class_names[prob_class]}")
+            print(f"  Similarity: {similarity:.4f}")
+
+    print(f"\nMatching paths and similarities for binary paths = 0:")
+    for entry in loaded_matching_pairs["binary_paths_0"]:
+        binary_path = entry["binary_path"]
+        binary_count = entry["binary_count"]
+        binary_classification = entry["binary_classification"]
+        print(
+            f"Binary Path: IF {' AND '.join([f'{feature} {op} {threshold}' for feature, op, threshold in binary_path])} -> | Count: {binary_count} | Classification: {binary_classification}")
+
+        for prob_path, prob_count, prob_class, similarity in entry[
+            "prob_paths"]:
+            print(
+                f"  Prob Path: IF {' AND '.join([f'{feature} {op} [{threshold[0]:.2f}, {threshold[1]:.2f}]' if op == 'in' else f'{feature} {op} {threshold:.2f}' for feature, op, threshold in prob_path])} -> | Count: {prob_count} | Classification: {class_names[prob_class]}")
+            print(f"  Similarity: {similarity:.4f}")
+
+
+def find_closest_paths_to_0_and_1(classifications_prob, counts_prob,
+                                  pruned_branches_prob, target_feature):
+    # Find the paths in the probabilistic tree where the threshold of feature "petal width (cm)" is closest to 1 and 0
+    target_feature = target_feature
+    closest_paths_prob_1 = []
+    closest_threshold_diff_1 = float('inf')
+    closest_paths_prob_0 = []
+    closest_threshold_diff_0 = float('inf')
+    for path, count, classification in zip(pruned_branches_prob, counts_prob,
+                                           classifications_prob):
+        for feature, op, threshold in path:
+            if feature == target_feature:
+                if isinstance(threshold, tuple):
+                    threshold_diff_1 = min(abs(threshold[0] - 1),
+                                           abs(threshold[1] - 1))
+                    threshold_diff_0 = min(abs(threshold[0]), abs(threshold[1]))
+                    if abs(threshold[1] - 1) <= closest_threshold_diff_1:
+                        if abs(threshold[1] - 1) < closest_threshold_diff_1:
+                            closest_paths_prob_1 = []
+                            closest_threshold_diff_1 = abs(threshold[1] - 1)
+                        closest_paths_prob_1.append(
+                            (path, count, classification))
+                    if abs(threshold[0] - 1) <= closest_threshold_diff_1:
+                        if abs(threshold[0] - 1) < closest_threshold_diff_1:
+                            closest_paths_prob_1 = []
+                            closest_threshold_diff_1 = abs(threshold[0] - 1)
+                        closest_paths_prob_1.append(
+                            (path, count, classification))
+                    if abs(threshold[0]) <= closest_threshold_diff_0:
+                        if abs(threshold[0]) < closest_threshold_diff_0:
+                            closest_paths_prob_0 = []
+                            closest_threshold_diff_0 = abs(threshold[0])
+                        closest_paths_prob_0.append(
+                            (path, count, classification))
+                    if abs(threshold[1]) <= closest_threshold_diff_0:
+                        if abs(threshold[1]) < closest_threshold_diff_0:
+                            closest_paths_prob_0 = []
+                            closest_threshold_diff_0 = abs(threshold[1])
+                        closest_paths_prob_0.append(
+                            (path, count, classification))
+                else:
+                    threshold_diff_1 = abs(threshold - 1)
+                    threshold_diff_0 = abs(threshold)
+                    if threshold_diff_1 <= closest_threshold_diff_1:
+                        if threshold_diff_1 < closest_threshold_diff_1:
+                            closest_paths_prob_1 = []
+                            closest_threshold_diff_1 = threshold_diff_1
+                        closest_paths_prob_1.append(
+                            (path, count, classification))
+                    if threshold_diff_0 <= closest_threshold_diff_0:
+                        if threshold_diff_0 < closest_threshold_diff_0:
+                            closest_paths_prob_0 = []
+                            closest_threshold_diff_0 = threshold_diff_0
+                        closest_paths_prob_0.append(
+                            (path, count, classification))
+    return closest_paths_prob_0, closest_paths_prob_1, target_feature
+
+
+def find_best_trees(X, y, num_trees = 1500, threshold = 0.02, min_performance = 0.9,
+                    min_samples_leaf=1):
+
+    # Number of different random states to visualize
+    num_trees = num_trees
+    performance_threshold = threshold  # Performance range (e.g., within 2% of the best performance)
+    min_performance = min_performance  # Minimum performance to consider (e.g., accuracy of 90%)
+    # First pass to collect all scores
+
+    scores = []
+    classifiers = []
+    for i in range(num_trees):
+        random_state = i
+        clf = DecisionTreeClassifier(random_state=random_state,
+                                     min_samples_leaf=min_samples_leaf)
+        clf.fit(X, y)  # Train on the full dataset
+        y_pred = clf.predict(X)
+        mean_score = accuracy_score(y, y_pred)
+        classifiers.append((clf, random_state, mean_score))
+        scores.append(mean_score)
+
+    # Determine the best score
+    best_score = max(scores)
+
+    # Filter classifiers with similar performance
+    similar_trees = [
+        (clf, random_state, mean_score)
+        for clf, random_state, mean_score in classifiers
+        if
+        best_score - performance_threshold <= mean_score <= best_score + performance_threshold and mean_score >= min_performance
+    ]
+    # Remove identical trees
+    unique_trees = []
+    seen_hashes = set()
+    for clf, random_state, mean_score in similar_trees:
+        tree_hash = serialize_tree(clf)
+        if tree_hash not in seen_hashes:
+            seen_hashes.add(tree_hash)
+            unique_trees.append((clf, random_state, mean_score))
+
+    # Visualize the unique trees with similar performance
+    # for clf, random_state, mean_score in unique_trees:
+    #     title = f"tree_random_state_{random_state}_score_{mean_score:.4f}"
+    #     graph = export_tree_graphviz(clf, feature_names, class_names, title)
+        # graph.view()
+
+    return unique_trees
+
+
+def calculate_feature_similarity(tree1, tree2):
+    # Extract feature importances
+    features1 = tree1.feature_importances_
+    features2 = tree2.feature_importances_
+
+    # Compute dot product similarity
+    similarity = np.dot(features1, features2)
+
+    return similarity
+
+
+def find_highest_similarity_pair(trees_list1, trees_list2, feature_names):
+    max_similarity = -1
+    best_pair = (None, None)
+
+    for tree1 in trees_list1:
+        for tree2 in trees_list2:
+            similarity = calculate_feature_similarity(tree1, tree2)
+            if similarity > max_similarity:
+                max_similarity = similarity
+                best_pair = (tree1, tree2)
+
+    # find the feature with the highest importance in the best pair
+    best_pair_features = []
+    for tree in best_pair:
+        best_pair_features.append(tree.feature_importances_.argmax())
+
+    # raise an error if the best feature is not the same in both trees
+    if best_pair_features[0] != best_pair_features[1]:
+        raise ValueError('The best feature is not the same in both trees')
+
+    # print the feature importances in the two trees
+    print(f"Feature importances for the best pair of trees:")
+    print(f"Tree 1: {best_pair[0].feature_importances_}")
+    print(f"Tree 2: {best_pair[1].feature_importances_}")
+
+    print(f"Best feature: {feature_names[best_pair_features[0]]}")
+    best_feature_name = feature_names[best_pair_features[0]]
+
+    return best_pair, max_similarity, best_feature_name
+
+
+def prune(tree):
+    def is_leaf(node):
+        return (tree.children_left[node] == _tree.TREE_LEAF and
+                tree.children_right[node] == _tree.TREE_LEAF)
+
+    def can_prune(node):
+        left_child = tree.children_left[node]
+        right_child = tree.children_right[node]
+
+        if is_leaf(left_child) and is_leaf(right_child):
+            left_class = np.argmax(tree.value[left_child])
+            right_class = np.argmax(tree.value[right_child])
+            return left_class == right_class
+
+        return False
+
+    def prune_nodes(node):
+        if node == _tree.TREE_LEAF:
+            return
+
+        left_child = tree.children_left[node]
+        right_child = tree.children_right[node]
+
+        prune_nodes(left_child)
+        prune_nodes(right_child)
+
+        if can_prune(node):
+            tree.children_left[node] = _tree.TREE_LEAF
+            tree.children_right[node] = _tree.TREE_LEAF
+            tree.feature[node] = -2  # Set feature to undefined
+            tree.threshold[node] = -2.0  # Set threshold to undefined
+
+    prune_nodes(0)
+
+
+def print_tree_splits(tree, feature_names, class_names):
+    def traverse(node, depth):
+        indent = "  " * depth
+        if tree.children_left[node] == _tree.TREE_LEAF:
+            class_name = class_names[np.argmax(tree.value[node])]
+            print(f"{indent}Leaf node: Predicts class {class_name}")
+        else:
+            feature = feature_names[tree.feature[node]]
+            threshold = tree.threshold[node]
+            print(f"{indent}Node: If {feature} <= {threshold:.20f}")
+            traverse(tree.children_left[node], depth + 1)
+            print(f"{indent}Else {feature} > {threshold:.20f}")
+            traverse(tree.children_right[node], depth + 1)
+
+    traverse(0, 0)

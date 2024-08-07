@@ -50,6 +50,7 @@ def prepare_device(n_gpu_use):
 
 def get_correct(y_hat, y, num_classes):
     if num_classes == 1:
+        y_hat = torch.sigmoid(y_hat)
         y_hat = [1 if y_hat[i] >= 0.5 else 0 for i in range(len(y_hat))]
         correct = [1 if y_hat[i] == y[i] else 0 for i in range(len(y_hat))]
         return np.sum(correct)

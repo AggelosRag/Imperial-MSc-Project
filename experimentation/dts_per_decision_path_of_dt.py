@@ -7,7 +7,7 @@ from sklearn.model_selection import train_test_split
 import os
 import graphviz
 
-from to_be_added.build_combined_tree import build_combined_tree
+from experimentation.build_combined_tree_with_scikit_effort import build_combined_tree
 
 
 def get_leaf_samples_and_features(tree, X):

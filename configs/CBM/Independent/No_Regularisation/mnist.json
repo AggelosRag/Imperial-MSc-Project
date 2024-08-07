@@ -19,10 +19,11 @@
                          "width_small", "width_medium", "width_large", "width_xlarge",
                          "length_small", "length_medium", "length_large", "length_xlarge"],
         "class_names": ["6", "8", "9"],
-        "contour_plot": false
+        "contour_plot": false,
+        "use_attribute_imbalance": false
     },
     "data_loader": {
-        "type": "get_mnist_dataLoader",
+        "type": "get_mnist_dataLoader_original",
         "args":{
             "data_dir": "./datasets/MNIST",
             "type": "SGD",
@@ -31,15 +32,15 @@
     },
     "trainer": {
         "type": "IndependentCBMTrainer",
-        "cbm_type": "hard",
+        "hard_cbm": true,
         "args": {},
-        "xc_epochs": 15,
+        "xc_epochs": 100,
         "cy_epochs": 15,
         "save_dir": "saved/",
         "save_period": 1000,
         "verbosity": 2,
-        "monitor": "off",
-        "early_stop": 10,
+        "monitor": "min val_loss",
+        "early_stop": 0,
         "tensorboard": true
     },
     "regularisation": {

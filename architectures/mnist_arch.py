@@ -4,18 +4,56 @@ import torch
 import numpy as np
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
 
-from experimentation.dts_per_decision_path_of_dt_without_scikit import \
+from data_loaders import find_class_imbalance_mnist
+from networks.custom_dt_gini_with_entropy_metrics import \
     CustomDecisionTree
 from model.loss import SelectiveNetLoss, CELoss
 
+class MNISTBlackBoxArchitecture:
+    def __init__(self, config, device, hard_concepts=None, data_loader=None):
+
+        self.model = ConceptPredictor(config["dataset"]["num_classes"])
+
+        # Define loss functions and optimizers
+        self.criterion_label = CELoss()
+
+        if "weight_decay" not in config["model"]:
+            xc_params_to_update = [
+                {'params': self.model.concept_predictor.parameters(), 'weight_decay': config["model"]['xc_weight_decay']},
+            ]
+            self.xc_optimizer = torch.optim.Adam(xc_params_to_update, lr=config["model"]['xc_lr'])
+            cy_params_to_update = [
+                {'params': self.model.label_predictor.parameters(), 'weight_decay': config["model"]['cy_weight_decay']},
+            ]
+            self.cy_optimizer = torch.optim.Adam(cy_params_to_update, lr=config["model"]['cy_lr'])
+        else:
+            # only apply regularisation (if any) to the label predictor,
+            # for a fair comparison with Tree Regularisation
+            params_to_update = [
+                {'params': self.model.parameters(),
+                 'weight_decay': config["model"]['weight_decay']},
+            ]
+            self.optimizer = torch.optim.Adam(params_to_update,
+                                              lr=config["model"]['lr'])
+        self.lr_scheduler = None
 
 class MNISTCBMwithDTaslabelPredictorArchitecture:
-    def __init__(self, config, device, hard_concepts=None):
+    def __init__(self, config, device, hard_concepts=None, data_loader=None):
 
         if hard_concepts is None:
             self.hard_concepts = []
         else:
             self.hard_concepts = hard_concepts
+
+        C_train = data_loader.dataset[:][1]
+        if "use_attribute_imbalance" in config["dataset"]:
+            if config["dataset"]["use_attribute_imbalance"]:
+                self.imbalance = torch.FloatTensor(find_class_imbalance_mnist(C_train)).to(device)
+            else:
+                self.imbalance = None
+        else:
+            self.imbalance = None
+
 
         concept_size = config["dataset"]["num_concepts"] - len(self.hard_concepts)
         self.concept_predictor = ConceptPredictor(config["dataset"]["num_concepts"])
@@ -25,7 +63,7 @@ class MNISTCBMwithDTaslabelPredictorArchitecture:
         self.model = MainNetwork(self.concept_predictor, self.label_predictor)
 
         # Define loss functions and optimizers
-        self.criterion_concept = torch.nn.BCEWithLogitsLoss()
+        self.criterion_concept = torch.nn.BCEWithLogitsLoss(weight=self.imbalance)
         self.criterion_per_concept = nn.BCEWithLogitsLoss(reduction='none')
 
         xc_params_to_update = [
@@ -36,12 +74,22 @@ class MNISTCBMwithDTaslabelPredictorArchitecture:
         self.lr_scheduler = None
 
 class MNISTCBMTreeArchitecture:
-    def __init__(self, config, device, hard_concepts=None):
+    def __init__(self, config, device, hard_concepts=None, data_loader=None):
 
         if hard_concepts is None:
             self.hard_concepts = []
         else:
             self.hard_concepts = hard_concepts
+
+        C_train = data_loader.dataset[:][1]
+        if "use_attribute_imbalance" in config["dataset"]:
+            if config["dataset"]["use_attribute_imbalance"]:
+                self.imbalance = torch.FloatTensor(find_class_imbalance_mnist(C_train)).to(device)
+            else:
+                self.imbalance = None
+        else:
+            self.imbalance = None
+
 
         concept_size = config["dataset"]["num_concepts"] - len(self.hard_concepts)
         self.concept_predictor = ConceptPredictor(concept_size)
@@ -54,7 +102,7 @@ class MNISTCBMTreeArchitecture:
         self.model = TreeNet(self.mn_model, self.sr_model)
 
         # Define loss functions and optimizers
-        self.criterion_concept = torch.nn.BCEWithLogitsLoss()
+        self.criterion_concept = torch.nn.BCEWithLogitsLoss(weight=self.imbalance)
         self.criterion_per_concept = nn.BCEWithLogitsLoss(reduction='none')  # BCE Loss for binary concepts        self.criterion_label = CELoss()
         self.criterion_sr = nn.MSELoss()
 
@@ -65,12 +113,21 @@ class MNISTCBMTreeArchitecture:
         self.optimizer_mn = torch.optim.Adam(self.mn_model.parameters(), lr=0.001)
 
 class MNISTCBMArchitecture:
-    def __init__(self, config, device, hard_concepts=None):
+    def __init__(self, config, device, hard_concepts=None, data_loader=None):
 
         if hard_concepts is None:
             self.hard_concepts = []
         else:
             self.hard_concepts = hard_concepts
+
+        C_train = data_loader.dataset[:][1]
+        if "use_attribute_imbalance" in config["dataset"]:
+            if config["dataset"]["use_attribute_imbalance"]:
+                self.imbalance = torch.FloatTensor(find_class_imbalance_mnist(C_train)).to(device)
+            else:
+                self.imbalance = None
+        else:
+            self.imbalance = None
 
         concept_size = config["dataset"]["num_concepts"] - len(self.hard_concepts)
         self.concept_predictor = ConceptPredictor(concept_size)
@@ -79,7 +136,7 @@ class MNISTCBMArchitecture:
         self.model = MainNetwork(self.concept_predictor, self.label_predictor)
 
         # Define loss functions and optimizers
-        self.criterion_concept = torch.nn.BCEWithLogitsLoss()
+        self.criterion_concept = torch.nn.BCEWithLogitsLoss(weight=self.imbalance)
         self.criterion_per_concept = nn.BCEWithLogitsLoss(reduction='none')
         self.criterion_label = CELoss()
 
@@ -107,12 +164,22 @@ class MNISTCBMArchitecture:
         self.lr_scheduler = None
 
 class MNISTCBMSelectiveNetArchitecture:
-    def __init__(self, config, device, hard_concepts=None):
+    def __init__(self, config, device, hard_concepts=None, data_loader=None):
 
         if hard_concepts is None:
             self.hard_concepts = []
         else:
             self.hard_concepts = hard_concepts
+
+        C_train = data_loader.dataset[:][1]
+        if "use_attribute_imbalance" in config["dataset"]:
+            if config["dataset"]["use_attribute_imbalance"]:
+                self.imbalance = torch.FloatTensor(find_class_imbalance_mnist(C_train)).to(device)
+            else:
+                self.imbalance = None
+        else:
+            self.imbalance = None
+
 
         concept_size = config["dataset"]["num_concepts"] - len(self.hard_concepts)
         self.concept_predictor = ConceptPredictor(concept_size)
@@ -132,7 +199,7 @@ class MNISTCBMSelectiveNetArchitecture:
                                         num_classes=config["dataset"]["num_classes"])
 
         # Define loss functions and optimizers
-        self.criterion_concept = torch.nn.BCEWithLogitsLoss()
+        self.criterion_concept = torch.nn.BCEWithLogitsLoss(weight=self.imbalance)
         self.criterion_per_concept = nn.BCEWithLogitsLoss(reduction='none')
         CE = nn.CrossEntropyLoss(reduction='none')
         self.criterion_label = SelectiveNetLoss(
@@ -179,19 +246,46 @@ class MNISTCYArchitecture:
                                           weight_decay=config["model"]['weight_decay'])
 
 # Define the models
+# class ConceptPredictor(nn.Module):
+#     def __init__(self, num_concepts):
+#         super(ConceptPredictor, self).__init__()
+#         self.fc1 = nn.Linear(28 * 28, 512)
+#         self.fc2 = nn.Linear(512, 256)
+#         self.fc3 = nn.Linear(256, num_concepts)
+#
+#     def forward(self, x):
+#         x = x.view(-1, 28 * 28)
+#         x = torch.relu(self.fc1(x))
+#         x = torch.relu(self.fc2(x))
+#         #x = self.fc3(x)
+#         x = self.fc3(x)  # Sigmoid activation for binary concepts
+#         return x
+
 class ConceptPredictor(nn.Module):
     def __init__(self, num_concepts):
         super(ConceptPredictor, self).__init__()
-        self.fc1 = nn.Linear(28 * 28, 512)
-        self.fc2 = nn.Linear(512, 256)
-        self.fc3 = nn.Linear(256, num_concepts)
+        self.cnn_model = nn.Sequential(
+            nn.Conv2d(1, 6, 5),  # Convolutional layer
+            nn.ReLU(),
+            nn.AvgPool2d(2, stride=2),
+            nn.Conv2d(6, 16, 5),
+            nn.ReLU(),
+            nn.AvgPool2d(2, stride=2)
+        )
+        self.fc_model = nn.Sequential(
+            nn.Linear(256, 120),
+            # Adjust the input size based on your CNN output
+            nn.ReLU(),
+            nn.Linear(120, 84),
+            nn.ReLU(),
+            nn.Linear(84, num_concepts)  # Output 6 regression values
+        )
 
     def forward(self, x):
-        x = x.view(-1, 28 * 28)
-        x = torch.relu(self.fc1(x))
-        x = torch.relu(self.fc2(x))
-        #x = self.fc3(x)
-        x = self.fc3(x)  # Sigmoid activation for binary concepts
+        x = self.cnn_model(x)
+        x = x.view(x.size(0), -1)  # Flatten the features
+        x = self.fc_model(x)
+        #x = torch.sigmoid(self.fc_model(x))  # Sigmoid activation for binary concepts
         return x
 
 class LabelPredictor(nn.Module):

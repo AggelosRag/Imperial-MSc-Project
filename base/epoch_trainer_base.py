@@ -6,8 +6,8 @@ from sklearn.metrics import accuracy_score
 from sklearn.tree import DecisionTreeClassifier, export_graphviz
 
 from base import TrainerBase
-from experimentation.tree_comparison_utils import prune
-from networks.custom_decision_treeB import CustomDecisionTree, tree_to_dict, \
+from utils.tree_utils import prune
+from networks.custom_decision_with_fixed_top_nodes import CustomDecisionTree, tree_to_dict, \
     export_tree
 from utils.tree_utils import get_light_colors, replace_splits, \
     modify_dot_with_colors

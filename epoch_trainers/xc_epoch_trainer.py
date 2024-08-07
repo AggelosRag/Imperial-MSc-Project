@@ -3,6 +3,7 @@ import pickle
 
 import numpy as np
 import torch
+from sklearn.metrics import recall_score, precision_score
 from tqdm import tqdm
 import sys
 
@@ -169,10 +170,14 @@ class XC_Epoch_Trainer(EpochTrainerBase):
         self.model.concept_predictor.eval()
         #tensor_X = torch.FloatTensor().to(self.device)
         tensor_C_pred = torch.FloatTensor().to(self.device)
+        tensor_C = torch.FloatTensor().to(self.device)
         tensor_y = torch.LongTensor().to(self.device)
 
         test_metrics = {"concept_loss": 0, "loss_per_concept": np.zeros(self.num_concepts), "total_correct": 0,
                         "accuracy_per_concept": np.zeros(self.num_concepts)}
+
+        misclassified_examples = {}
+        correctly_classified_examples = {}
 
         with torch.no_grad():
             with tqdm(total=len(test_data_loader), file=sys.stdout) as t:
@@ -188,6 +193,7 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                     #tensor_X = torch.cat((tensor_X, X_batch), dim=0)
                     tensor_C_pred = torch.cat((tensor_C_pred, C_pred), dim=0)
                     tensor_y = torch.cat((tensor_y, y_batch), dim=0)
+                    tensor_C = torch.cat((tensor_C, C_batch), dim=0)
 
                     # Calculate Concept losses
                     loss_concept_total = self.criterion(C_pred, C_batch)
@@ -200,6 +206,28 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                     # Track number of corrects per concept
                     correct_per_column = column_get_correct(C_pred, C_batch).detach().cpu().numpy()
                     test_metrics["accuracy_per_concept"] += np.array([x for x in correct_per_column])
+
+                    # Find misclassified examples in the current batch
+                    preds = torch.sigmoid(C_pred)
+                    preds_binary = (preds > 0.5).int()
+
+                    misclassified = (preds_binary != C_batch)
+                    all_concepts_correctly_classified = (preds_binary == C_batch)
+                    for i in range(X_batch.shape[0]):
+                        if misclassified[i].any():  # Check if any class is misclassified
+                            sample_idx = batch_idx * test_data_loader.batch_size + i
+                            misclassified_examples[sample_idx] = {
+                                'X': X_batch[i].cpu().numpy(),
+                                "C": C_batch[i].cpu().numpy(),
+                                'C_pred_w_sigmoid': preds[i].cpu().numpy()
+                            }
+                        elif all_concepts_correctly_classified[i].all():
+                            sample_idx = batch_idx * test_data_loader.batch_size + i
+                            correctly_classified_examples[sample_idx] = {
+                                'X': X_batch[i].cpu().numpy(),
+                                "C": C_batch[i].cpu().numpy(),
+                                'C_pred_w_sigmoid': preds[i].cpu().numpy()
+                            }
 
                     t.set_postfix(
                         batch_id='{0}'.format(batch_idx + 1))
@@ -214,6 +242,14 @@ class XC_Epoch_Trainer(EpochTrainerBase):
         # save test metrics in pickle
         with open(os.path.join(self.config.save_dir, f"test_metrics_xtoc.pkl"), "wb") as f:
             pickle.dump(test_metrics, f)
+
+        # Save the misclassified examples to a pickle file
+        with open(os.path.join(self.config.save_dir, f"missclassified_test_samples.pkl"), 'wb') as f:
+            pickle.dump(misclassified_examples, f)
+
+        # Save the correctly classified examples to a pickle file
+        with open(os.path.join(self.config.save_dir, f"correctly_classified_test_samples.pkl"), 'wb') as f:
+            pickle.dump(correctly_classified_examples, f)
 
         # print test metrics
         print("Test Metrics:")
@@ -234,6 +270,35 @@ class XC_Epoch_Trainer(EpochTrainerBase):
         if hard_cbm:
             tensor_C_pred[tensor_C_pred >= 0.5] = 1
             tensor_C_pred[tensor_C_pred < 0.5] = 0
+
+        # Calculate precision and recall per column
+        precision_per_column = []
+        recall_per_column = []
+        all_labels = tensor_C.cpu().numpy()
+        all_preds = tensor_C_pred.cpu().numpy()
+
+        for i in range(all_labels.shape[1]):
+            precision = precision_score(all_labels[:, i], all_preds[:, i])
+            recall = recall_score(all_labels[:, i], all_preds[:, i])
+            precision_per_column.append(precision)
+            recall_per_column.append(recall)
+
+        # Calculate average precision and recall
+        avg_precision = np.mean(precision_per_column)
+        avg_recall = np.mean(recall_per_column)
+
+        test_metrics["precision"] = avg_precision
+        test_metrics["recall"] = avg_recall
+        test_metrics["precision_per_concept"] = precision_per_column
+        test_metrics["recall_per_concept"] = recall_per_column
+        print(f"Average Recall: {test_metrics['recall']}")
+        print(f"Average Precision: {test_metrics['precision']}")
+        print(f"Recall per Concept: {test_metrics['recall_per_concept']}")
+        print(f"Precision per Concept: {test_metrics['precision_per_concept']}")
+        self.logger.info(f"Average Recall: {test_metrics['recall']}")
+        self.logger.info(f"Average Precision: {test_metrics['precision']}")
+        self.logger.info(f"Recall per Concept: {test_metrics['recall_per_concept']}")
+        self.logger.info(f"Precision per Concept: {test_metrics['precision_per_concept']}")
 
         # output_path = os.path.join(self.config.save_dir, "test_tensors")
         # if not os.path.exists(output_path):

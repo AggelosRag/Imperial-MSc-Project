@@ -10,7 +10,7 @@ from networks.model_cub import get_model
 
 
 class CUBCBMArchitecture:
-    def __init__(self, config, device, hard_concepts=None):
+    def __init__(self, config, device, hard_concepts=None, data_loader=None):
 
         if hard_concepts is None:
             self.hard_concepts = []
@@ -24,7 +24,6 @@ class CUBCBMArchitecture:
         else:
             self.imbalance = None
 
-        concept_size = config["dataset"]["num_concepts"] - len(self.hard_concepts)
         self.concept_predictor, _, _ = get_model("/Users/gouse/PycharmProjects/AR-Imperial-Thesis/networks")
         self.label_predictor = LabelPredictor(concept_size=config["dataset"]["num_concepts"],
                                               num_classes=config["dataset"]["num_classes"])

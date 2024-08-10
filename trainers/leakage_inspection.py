@@ -38,8 +38,9 @@ class LeakageInspectionTrainer:
             self.device, self.data_loader,
             self.valid_data_loader)
 
-    def train(self, save_dicts=True):
+    def train(self):
 
+        save_dicts = self.config["trainer"]["save_train_tensors"]
         logger = self.config.get_logger('train')
         if self.expert == 1 or "pretrained_concept_predictor" not in self.config["model"]:
             # train the x->c model
@@ -80,18 +81,18 @@ class LeakageInspectionTrainer:
         val_C_pred = val_C_pred.detach().cpu().numpy()
         val_y = val_y.detach().cpu().numpy()
 
-        print("\nTraining soft c->y DT label predictor")
-        logger.info("\nTraining soft c->y DT label predictor")
-        tree = CustomDecisionTree(min_samples_leaf=self.config["regularisation"]["min_samples_leaf"],
-                                  n_classes=self.config["dataset"]["num_classes"])
-        tree.fit(train_C_pred, train_y)
-
-        y_pred = tree.predict(train_C_pred)
-        print(f'Training Accuracy: {accuracy_score(train_y, y_pred)}')
-        y_pred = tree.predict(val_C_pred)
-        print(f'Validation Accuracy: {accuracy_score(val_y, y_pred)}')
-
-        self._visualize_DT_label_predictor(tree, X=train_C_pred, path='/soft_tree')
+        # print("\nTraining soft c->y DT label predictor")
+        # logger.info("\nTraining soft c->y DT label predictor")
+        # tree = CustomDecisionTree(min_samples_leaf=self.config["regularisation"]["min_samples_leaf"],
+        #                           n_classes=self.config["dataset"]["num_classes"])
+        # tree.fit(train_C_pred, train_y)
+        #
+        # y_pred = tree.predict(train_C_pred)
+        # print(f'Training Accuracy: {accuracy_score(train_y, y_pred)}')
+        # y_pred = tree.predict(val_C_pred)
+        # print(f'Validation Accuracy: {accuracy_score(val_y, y_pred)}')
+        #
+        # self._visualize_DT_label_predictor(tree, X=train_C_pred, path='/soft_tree')
 
         self.leaf_trees = {}
 
@@ -103,11 +104,11 @@ class LeakageInspectionTrainer:
             y_leaf_dict = {}
             y_original_pred_dict = {}
             y_pred_dict = {}
-            X_leaf_dict = {}
+            #X_leaf_dict = {}
 
         for leaf, sample_indices in leaf_samples_indices.items():
             C_leaf, y_leaf = all_C[sample_indices], all_y[sample_indices]
-            X_leaf = self.data_loader.dataset[:][0][sample_indices]
+            X_leaf = self.extract_x_subset_data(self.data_loader, sample_indices)
             y_original_pred = original_tree.predict(C_leaf)
             C_leaf_pred = self.xc_epoch_trainer._predict(X=X_leaf, use_data_loader=False)
             leaf_features_not_used = list(set(range(self.num_concepts)) - set(leaf_features_per_path[leaf]))
@@ -137,7 +138,7 @@ class LeakageInspectionTrainer:
                 y_leaf_dict[leaf] = y_leaf
                 y_original_pred_dict[leaf] = y_original_pred
                 y_pred_dict[leaf] = y_pred
-                X_leaf_dict[leaf] = X_leaf
+                #X_leaf_dict[leaf] = X_leaf
 
         if save_dicts:
             # save C_leaf_pred and y_leaf per leaf
@@ -163,12 +164,12 @@ class LeakageInspectionTrainer:
                 pkl.dump(y_original_pred_dict, f)
             with open(os.path.join(output_path, 'y_pred_dict.pkl'), 'wb') as f:
                 pkl.dump(y_pred_dict, f)
-            with open(os.path.join(output_path, 'X_leaf_dict.pkl'), 'wb') as f:
-                pkl.dump(X_leaf_dict, f)
+            # with open(os.path.join(output_path, 'X_leaf_dict.pkl'), 'wb') as f:
+            #     pkl.dump(X_leaf_dict, f)
 
         for leaf, sample_indices in leaf_samples_indices_val.items():
             C_leaf_val, y_leaf_val = all_C_val[sample_indices], all_y_val[sample_indices]
-            X_leaf_val = self.valid_data_loader.dataset[:][0][sample_indices]
+            X_leaf_val = self.extract_x_subset_data(self.valid_data_loader, sample_indices)
             y_original_pred = original_tree.predict(C_leaf_val)
             C_leaf_val_pred = self.xc_epoch_trainer._predict(X=X_leaf_val, use_data_loader=False)
             leaf_features_not_used_val = list(set(range(self.num_concepts)) - set(leaf_features_per_path_val[leaf]))
@@ -195,11 +196,15 @@ class LeakageInspectionTrainer:
                                            hard_tree=original_tree)
 
 
-    def test(self, test_data_loader, hard_cbm=False, save_dicts=False):
+    def test(self, test_data_loader, hard_cbm=False):
+
+        save_dicts = self.config["trainer"]["save_test_tensors"]
         # evaluate x->c
         tensor_C_binary_pred, tensor_y = self.xc_epoch_trainer._test(test_data_loader, hard_cbm=True)
         leaf_samples_indices, leaf_features_per_path = get_leaf_samples_and_features(self.arch.label_predictor, tensor_C_binary_pred)
 
+        tensor_C_binary_pred = tensor_C_binary_pred.detach().cpu().numpy()
+        tensor_y = tensor_y.detach().cpu().numpy()
         y_pred = self.arch.label_predictor.predict(tensor_C_binary_pred)
         print(f'\nTest Accuracy using the Hard CBM: {accuracy_score(tensor_y, y_pred)}')
 
@@ -217,7 +222,7 @@ class LeakageInspectionTrainer:
         accuracy_per_new_path_dict = {}
         for leaf, sample_indices in leaf_samples_indices.items():
             C_leaf, y_leaf = tensor_C_binary_pred[sample_indices], tensor_y[sample_indices]
-            X_leaf = test_data_loader.dataset[:][0][sample_indices]
+            X_leaf = self.extract_x_subset_data(test_data_loader, sample_indices)
             y_original_pred = self.arch.label_predictor.predict(C_leaf)
             C_leaf_pred = self.xc_epoch_trainer._predict(X=X_leaf, use_data_loader=False)
             leaf_features_not_used = list(set(range(self.num_concepts)) - set(leaf_features_per_path[leaf]))
@@ -416,23 +421,29 @@ class LeakageInspectionTrainer:
             all_y = self.data_loader.dataset[:][2]
             all_C_val = self.valid_data_loader.dataset[:][1]
             all_y_val = self.valid_data_loader.dataset[:][2]
-            train_dataset = torch.utils.data.TensorDataset(all_C, all_y)
-            val_dataset = torch.utils.data.TensorDataset(all_C_val, all_y_val)
-            train_data_loader = torch.utils.data.DataLoader(
-                train_dataset, batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=True
-            )
-            val_data_loader = torch.utils.data.DataLoader(
-                val_dataset, batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=False
-            )
         else:
-            train_data_loader = self.data_loader.dataset.get_all_data_in_tensors(
-                batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=True
+            all_C, all_y = self.data_loader.dataset.get_all_data_in_tensors(
+                batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=True,
+                return_loader=False
             )
-            val_data_loader = self.valid_data_loader.dataset.get_all_data_in_tensors(
-                batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=False
+            all_C_val, all_y_val = self.valid_data_loader.dataset.get_all_data_in_tensors(
+                batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=False,
+                return_loader=False
             )
 
         return all_C, all_y, all_C_val, all_y_val
+
+    def extract_x_subset_data(self, dataloader, subset_indices):
+
+        if isinstance(dataloader.dataset, torch.utils.data.TensorDataset):
+            X = dataloader.dataset[:][0][subset_indices]
+        else:
+            X = []
+            for i, sample in enumerate(dataloader.dataset.data):
+                if i in subset_indices:
+                    X.append(dataloader.dataset.__getitem__(i)[0])
+            X = torch.stack(X)
+        return X
 
     def _visualize_DT_label_predictor(self, tree, X=None, path=None, hard_tree=None):
 

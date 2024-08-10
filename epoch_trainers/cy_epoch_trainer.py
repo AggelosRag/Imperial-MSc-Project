@@ -133,8 +133,8 @@ class CY_Epoch_Trainer(EpochTrainerBase):
                     #                          'None', mode='train')
 
                     # visualize last tree
-                    self._visualize_tree(tree, self.config, epoch, APL, 'None',
-                                         'None', mode='train')
+                    # self._visualize_tree(tree, self.config, epoch, APL, 'None',
+                    #                      'None', mode='train')
 
                 loss = loss_label["target_loss"]
                 self.optimizer.zero_grad()
@@ -254,8 +254,8 @@ class CY_Epoch_Trainer(EpochTrainerBase):
                         #     self._visualize_tree(tree, self.config, epoch, APL, 'None',
                         #                          'None', mode='val')
 
-                        self._visualize_tree(tree, self.config, epoch, APL, 'None',
-                                             'None', mode='val')
+                        # self._visualize_tree(tree, self.config, epoch, APL, 'None',
+                        #                      'None', mode='val')
 
                     loss = loss_label["target_loss"]
                     self.metrics_tracker.update_batch(update_dict_or_key='loss',

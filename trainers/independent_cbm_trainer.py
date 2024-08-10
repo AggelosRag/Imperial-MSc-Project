@@ -1,9 +1,14 @@
 import torch.utils.data
 from matplotlib import pyplot as plt
+from sklearn.metrics import accuracy_score
+import graphviz
+import numpy as np
+import os
 
 from epoch_trainers.xc_epoch_trainer import XC_Epoch_Trainer
 from epoch_trainers.cy_epoch_trainer import CY_Epoch_Trainer
 from epoch_trainers.cy_epoch_tree_trainer import CY_Epoch_Tree_Trainer
+from utils.tree_utils import get_light_colors
 
 
 class IndependentCBMTrainer:
@@ -34,16 +39,22 @@ class IndependentCBMTrainer:
 
         # define the c->y model
         self.reg = reg
-        if reg == 'Tree':
-            self.cy_epoch_trainer = CY_Epoch_Tree_Trainer(
-                self.arch, self.config,
-                self.device, train_data_loader,
-                val_data_loader)
-        else:
-            self.cy_epoch_trainer = CY_Epoch_Trainer(
-                self.arch, self.config,
-                self.device, train_data_loader,
-                val_data_loader, expert=self.expert)
+
+        # check if the label predictor is a tree or not
+        if self.arch.model.label_predictor.__class__.__name__ in ['DecisionTreeClassifier', 'CustomDecisionTree']:
+            self.tree_label_predictor = True
+
+        if self.tree_label_predictor == False:
+            if reg == 'Tree':
+                self.cy_epoch_trainer = CY_Epoch_Tree_Trainer(
+                    self.arch, self.config,
+                    self.device, train_data_loader,
+                    val_data_loader)
+            else:
+                self.cy_epoch_trainer = CY_Epoch_Trainer(
+                    self.arch, self.config,
+                    self.device, train_data_loader,
+                    val_data_loader, expert=self.expert)
 
     def train(self):
 
@@ -58,21 +69,47 @@ class IndependentCBMTrainer:
         # train the c->y model
         print("\nTraining c->y")
         logger.info("Training c->y")
-        self.cy_epoch_trainer._training_loop(self.cy_epochs)
-        self.plot_cy()
+        if self.tree_label_predictor:
+            # create a new dataloader for the c->y model
+            all_C, all_y, all_C_val, all_y_val = self.extract_cy_data()
+            all_C = all_C.detach().cpu().numpy()
+            all_y = all_y.detach().cpu().numpy()
+            all_C_val = all_C_val.detach().cpu().numpy()
+            all_y_val = all_y_val.detach().cpu().numpy()
+
+            # train the c->y model
+            print("\nTraining hard c->y DT label predictor")
+            logger.info("\nTraining hard c->y DT label predictor")
+            self.arch.label_predictor.fit(all_C, all_y)
+
+            y_pred = self.arch.label_predictor.predict(all_C)
+            print(f'Training Accuracy: {accuracy_score(all_y, y_pred)}')
+            y_pred = self.arch.label_predictor.predict(all_C_val)
+            print(f'Validation Accuracy: {accuracy_score(all_y_val, y_pred)}')
+            self._visualize_DT_label_predictor(self.arch.label_predictor,
+                                               X=all_C, path='')
+
+        else:
+            self.cy_epoch_trainer._training_loop(self.cy_epochs)
+            self.plot_cy()
 
     def test(self, test_data_loader, hard_cbm=True):
         # evaluate x->c
         tensor_C_pred, tensor_y = self.xc_epoch_trainer._test(test_data_loader, hard_cbm)
 
-        # create a new dataloader for the c->y model
-        test_data_loader = torch.utils.data.DataLoader(
-            torch.utils.data.TensorDataset(tensor_C_pred, tensor_y),
-            batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=False
-        )
-
         # evaluate c->y
-        self.cy_epoch_trainer._test(test_data_loader)
+        if self.tree_label_predictor:
+            tensor_C_pred = tensor_C_pred.detach().cpu().numpy()
+            tensor_y = tensor_y.detach().cpu().numpy()
+            y_pred = self.arch.label_predictor.predict(tensor_C_pred)
+            print(f'\nTest Accuracy using the Hard CBM: {accuracy_score(tensor_y, y_pred)}')
+        else:
+            # create a new dataloader for the c->y model
+            test_data_loader = torch.utils.data.DataLoader(
+                torch.utils.data.TensorDataset(tensor_C_pred, tensor_y),
+                batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=False
+            )
+            self.cy_epoch_trainer._test(test_data_loader)
 
     def plot_xc(self):
         results_trainer = self.xc_epoch_trainer.metrics_tracker.result()
@@ -226,3 +263,61 @@ class IndependentCBMTrainer:
             )
 
         return train_data_loader, val_data_loader
+
+    def extract_cy_data(self):
+
+        if isinstance(self.data_loader.dataset, torch.utils.data.TensorDataset):
+            all_C = self.data_loader.dataset[:][1]
+            all_y = self.data_loader.dataset[:][2]
+            all_C_val = self.valid_data_loader.dataset[:][1]
+            all_y_val = self.valid_data_loader.dataset[:][2]
+        else:
+            all_C, all_y = self.data_loader.dataset.get_all_data_in_tensors(
+                batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=True,
+                return_loader=False
+            )
+            all_C_val, all_y_val = self.valid_data_loader.dataset.get_all_data_in_tensors(
+                batch_size=self.config["data_loader"]["args"]["batch_size"], shuffle=False,
+                return_loader=False
+            )
+
+        return all_C, all_y, all_C_val, all_y_val
+
+    def _visualize_DT_label_predictor(self, tree, X=None, path=None, hard_tree=None):
+
+        colors = get_light_colors(len(self.config['dataset']['class_names']))
+        colors_dict = {i: colors[i] for i in range(len(self.config['dataset']['class_names']))}
+
+        APL = tree.node_count
+
+        fig_path = str(self.config.log_dir) + '/trees'
+        if path is not None:
+            fig_path = fig_path + path
+        if not os.path.exists(fig_path):
+            os.makedirs(fig_path)
+
+        dot_data = tree.export_tree(feature_names = self.config['dataset']['concept_names'],
+                                    class_names = self.config['dataset']['class_names'],
+                                    class_colors = colors)
+
+        # Render the graph
+        graph = graphviz.Source(dot_data, directory=fig_path)
+        name = f'dt_label_predictor_nodes_{APL}'
+        graph.render(name, format="pdf", cleanup=True)
+
+        if X is not None:
+            if hard_tree is not None:
+                tree_used_for_paths = hard_tree
+            else:
+                tree_used_for_paths = tree
+            leaf_indices = tree_used_for_paths.apply(X)
+
+            for leaf in np.unique(leaf_indices):
+                sample_indices = np.where(leaf_indices == leaf)[0]
+                decision_paths = tree_used_for_paths.decision_path(X[sample_indices])
+                tree.export_decision_paths_with_subtree(decision_paths,
+                                           feature_names = self.config['dataset']['concept_names'],
+                                           class_colors=colors,
+                                           class_names = self.config['dataset']['class_names'],
+                                           output_dir = fig_path + '/decision_paths',
+                                           leaf_id = leaf)

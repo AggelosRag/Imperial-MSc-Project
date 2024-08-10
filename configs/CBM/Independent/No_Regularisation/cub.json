@@ -8,7 +8,8 @@
     },
     "model": {
         "xc_lr": 0.01,
-        "xc_weight_decay": 0,
+        "xc_weight_decay": 0.000004,
+        "xc_momentum": 0.9,
         "cy_lr": 0.001,
         "cy_weight_decay": 0
     },
@@ -227,16 +228,17 @@
     },
     "trainer": {
         "type": "IndependentCBMTrainer",
-        "cbm_type": "hard",
+        "hard_cbm": true,
         "args": {},
         "xc_epochs": 300,
-        "cy_epochs": 100,
+        "cy_epochs": 9,
         "save_dir": "saved/",
         "save_period": 20,
         "verbosity": 2,
         "monitor": "min val_loss",
         "early_stop": 0,
-        "tensorboard": true
+        "tensorboard": true,
+        "save_test_tensors": false
     },
     "regularisation": {
         "type": "L2",

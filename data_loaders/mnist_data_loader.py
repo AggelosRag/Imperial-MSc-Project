@@ -10,7 +10,7 @@ from torchvision import datasets, transforms
 #from base import TwoBatchTripletDataLoader, TwoBatchDataLoader
 
 def get_mnist_dataLoader(data_dir='./datasets/parabola',
-                        type='SGD',
+                        type='SGD', config=None,
                         batch_size=None):
 
     # Download training and test sets

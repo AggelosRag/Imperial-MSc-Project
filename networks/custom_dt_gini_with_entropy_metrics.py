@@ -3,9 +3,6 @@ import graphviz
 import os
 
 from scipy.stats import entropy
-from sklearn.tree import DecisionTreeClassifier, export_graphviz, _tree, \
-    plot_tree
-
 from data_loaders import get_mnist_dataLoader, get_mnist_dataLoader_original
 from utils.tree_utils import get_light_colors
 
@@ -66,6 +63,7 @@ class CustomDecisionTree:
             node_id=node_id
         )
         self.node_count += 1
+        print(f"Node added with id {node_id}")
 
         # print(
         #     f"Node {node_id}: Gini={node_gini:.4f}, Entropy={node_entropy:.4f}, Samples={len(y)}, Class={predicted_class}")
@@ -256,13 +254,19 @@ class CustomDecisionTree:
             'node [shape=box, style="filled, rounded", fontname="helvetica"] ;')
         dot_data.append('edge [fontname="helvetica"] ;')
 
+        def format_values(values, class_names):
+            value_str = ""
+            for i, count in enumerate(values):
+                if count > 0:
+                    value_str += f"{class_names[i]}: {count}\\n"
+            return value_str.strip()
+
         def add_node(node, node_id):
             if node.left or node.right:
                 threshold = node.threshold
                 # Handle the special case for fixed splits
                 if threshold == 0.5:
-                    # threshold_str = "== 0"
-                    threshold_str = f"<= {self._custom_print(threshold)}"
+                    threshold_str = "== 0"
                     fillcolor = light_grey
                 else:
                     threshold_str = f"<= {self._custom_print(threshold)}"
@@ -271,7 +275,7 @@ class CustomDecisionTree:
                 dot_data.append(
                     f'{node_id} [label="{feature_names[node.feature_index]} {threshold_str}\\n'
                     f'gini = {node.gini:.2f}\\nentropy = {node.entropy:.4f}\\nsamples = {node.num_samples}\\n'
-                    f'value = {node.num_samples_per_class}\\nclass = {class_names[node.predicted_class]}\\n'
+                    f'class = {class_names[node.predicted_class]}\\n'
                     f'info gain = {node.info_gain:.4f}\\ngain ratio = {node.gain_ratio:.4f}", fillcolor="{fillcolor}"] ;')
 
                 left_id = node_id * 2 + 1
@@ -284,9 +288,11 @@ class CustomDecisionTree:
                 # Leaf node: use the color of the predicted class
                 fillcolor = class_colors[
                     node.predicted_class % len(class_colors)]
+                value_str = format_values(node.num_samples_per_class,
+                                          class_names)
                 dot_data.append(
                     f'{node_id} [label="gini = {node.gini:.2f}\\nentropy = {node.entropy:.4f}\\nsamples = {node.num_samples}\\n'
-                    f'value = {node.num_samples_per_class}\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
+                    f'{value_str}\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
 
         add_node(self.tree, 0)
         dot_data.append("}")
@@ -340,6 +346,12 @@ class CustomDecisionTree:
             'node [shape=box, style="filled, rounded", fontname="helvetica"] ;')
         dot_data.append('edge [fontname="helvetica"] ;')
 
+        def format_values(values, line_length=10):
+            lines = []
+            for i in range(0, len(values), line_length):
+                lines.append(str(values[i:i + line_length]))
+            return '\\n'.join(lines)
+
         for i, node_id in enumerate(node_path):
             node = self._get_node_by_id(node_id)
             if node.left or node.right:
@@ -367,16 +379,17 @@ class CustomDecisionTree:
                 dot_data.append(
                     f'{node_id} [label="{feature_names[node.feature_index]} {threshold_str}\\n'
                     f'gini = {node.gini:.2f}\\nsamples = {node.num_samples}\\n'
-                    f'value = {node.num_samples_per_class}\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
+                    f'class = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
                 if i < len(node_path) - 1:
                     dot_data.append(f'{node_id} -> {next_node_id} ;')
             else:
                 # Leaf node: use the color of the predicted class
                 fillcolor = class_colors[
                     node.predicted_class % len(class_colors)]
+                value_str = format_values(node.num_samples_per_class)
                 dot_data.append(
                     f'{node_id} [label="gini = {node.gini:.2f}\\nsamples = {node.num_samples}\\n'
-                    f'value = {node.num_samples_per_class}\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
+                    f'value = {value_str}\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
 
         dot_data.append("}")
 
@@ -423,10 +436,16 @@ class CustomDecisionTree:
             'node [shape=box, style="filled, rounded", fontname="helvetica"] ;')
         dot_data.append('edge [fontname="helvetica"] ;')
 
+        def format_values(values, class_names):
+            value_str = ""
+            for i, count in enumerate(values):
+                if count > 0:
+                    value_str += f"{class_names[i]}: {count}\\n"
+            return value_str.strip()
+
         def add_node(node, node_id):
             if node.left or node.right:
                 threshold = node.threshold
-                # Handle the special case for fixed splits
                 if threshold == 0.5:
                     threshold_str = "== 0"
                     fillcolor = light_grey
@@ -437,7 +456,7 @@ class CustomDecisionTree:
                 dot_data.append(
                     f'{node_id} [label="{feature_names[node.feature_index]} {threshold_str}\\n'
                     f'gini = {node.gini:.2f}\\nsamples = {node.num_samples}\\n'
-                    f'value = {node.num_samples_per_class}\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
+                    f'class = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
 
                 left_id = node_id * 2 + 1
                 right_id = node_id * 2 + 2
@@ -449,9 +468,11 @@ class CustomDecisionTree:
                 # Leaf node: use the color of the predicted class
                 fillcolor = class_colors[
                     node.predicted_class % len(class_colors)]
+                value_str = format_values(node.num_samples_per_class,
+                                          class_names)
                 dot_data.append(
                     f'{node_id} [label="gini = {node.gini:.2f}\\nsamples = {node.num_samples}\\n'
-                    f'value = {node.num_samples_per_class}\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
+                    f'{value_str}\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
 
         for i, node_id in enumerate(node_path):
             node = self._get_node_by_id(node_id)
@@ -480,16 +501,18 @@ class CustomDecisionTree:
                 dot_data.append(
                     f'{node_id} [label="{feature_names[node.feature_index]} {threshold_str}\\n'
                     f'gini = {node.gini:.2f}\\nsamples = {node.num_samples}\\n'
-                    f'value = {node.num_samples_per_class}\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
+                    f'class = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
                 if i < len(node_path) - 1:
                     dot_data.append(f'{node_id} -> {next_node_id} ;')
             else:
                 # Leaf node: use the color of the predicted class
                 fillcolor = class_colors[
                     node.predicted_class % len(class_colors)]
+                value_str = format_values(node.num_samples_per_class,
+                                          class_names)
                 dot_data.append(
                     f'{node_id} [label="gini = {node.gini:.2f}\\nsamples = {node.num_samples}\\n'
-                    f'value = {node.num_samples_per_class}\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
+                    f'{value_str}\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
 
         # Add the subtree for the final node in the decision path
         final_node = self._get_node_by_id(node_path[-1])

@@ -176,8 +176,9 @@ class XC_Epoch_Trainer(EpochTrainerBase):
         test_metrics = {"concept_loss": 0, "loss_per_concept": np.zeros(self.num_concepts), "total_correct": 0,
                         "accuracy_per_concept": np.zeros(self.num_concepts)}
 
-        misclassified_examples = {}
-        correctly_classified_examples = {}
+        if self.config["trainer"]["save_test_tensors"] is True:
+            misclassified_examples = {}
+            correctly_classified_examples = {}
 
         with torch.no_grad():
             with tqdm(total=len(test_data_loader), file=sys.stdout) as t:
@@ -190,6 +191,7 @@ class XC_Epoch_Trainer(EpochTrainerBase):
 
                     # Forward pass
                     C_pred = self.model.concept_predictor(X_batch)
+                    C_pred = C_pred[:, self.arch.selected_concepts]
                     #tensor_X = torch.cat((tensor_X, X_batch), dim=0)
                     tensor_C_pred = torch.cat((tensor_C_pred, C_pred), dim=0)
                     tensor_y = torch.cat((tensor_y, y_batch), dim=0)
@@ -213,21 +215,23 @@ class XC_Epoch_Trainer(EpochTrainerBase):
 
                     misclassified = (preds_binary != C_batch)
                     all_concepts_correctly_classified = (preds_binary == C_batch)
-                    for i in range(X_batch.shape[0]):
-                        if misclassified[i].any():  # Check if any class is misclassified
-                            sample_idx = batch_idx * test_data_loader.batch_size + i
-                            misclassified_examples[sample_idx] = {
-                                'X': X_batch[i].cpu().numpy(),
-                                "C": C_batch[i].cpu().numpy(),
-                                'C_pred_w_sigmoid': preds[i].cpu().numpy()
-                            }
-                        elif all_concepts_correctly_classified[i].all():
-                            sample_idx = batch_idx * test_data_loader.batch_size + i
-                            correctly_classified_examples[sample_idx] = {
-                                'X': X_batch[i].cpu().numpy(),
-                                "C": C_batch[i].cpu().numpy(),
-                                'C_pred_w_sigmoid': preds[i].cpu().numpy()
-                            }
+
+                    if self.config["trainer"]["save_test_tensors"] is True:
+                        for i in range(X_batch.shape[0]):
+                            if misclassified[i].any():  # Check if any class is misclassified
+                                sample_idx = batch_idx * test_data_loader.batch_size + i
+                                misclassified_examples[sample_idx] = {
+                                    'X': X_batch[i].cpu().numpy(),
+                                    "C": C_batch[i].cpu().numpy(),
+                                    'C_pred_w_sigmoid': preds[i].cpu().numpy()
+                                }
+                            elif all_concepts_correctly_classified[i].all():
+                                sample_idx = batch_idx * test_data_loader.batch_size + i
+                                correctly_classified_examples[sample_idx] = {
+                                    'X': X_batch[i].cpu().numpy(),
+                                    "C": C_batch[i].cpu().numpy(),
+                                    'C_pred_w_sigmoid': preds[i].cpu().numpy()
+                                }
 
                     t.set_postfix(
                         batch_id='{0}'.format(batch_idx + 1))
@@ -243,13 +247,14 @@ class XC_Epoch_Trainer(EpochTrainerBase):
         with open(os.path.join(self.config.save_dir, f"test_metrics_xtoc.pkl"), "wb") as f:
             pickle.dump(test_metrics, f)
 
-        # Save the misclassified examples to a pickle file
-        with open(os.path.join(self.config.save_dir, f"missclassified_test_samples.pkl"), 'wb') as f:
-            pickle.dump(misclassified_examples, f)
+        if self.config["trainer"]["save_test_tensors"] is True:
+            # Save the misclassified examples to a pickle file
+            with open(os.path.join(self.config.save_dir, f"missclassified_test_samples.pkl"), 'wb') as f:
+                pickle.dump(misclassified_examples, f)
 
-        # Save the correctly classified examples to a pickle file
-        with open(os.path.join(self.config.save_dir, f"correctly_classified_test_samples.pkl"), 'wb') as f:
-            pickle.dump(correctly_classified_examples, f)
+            # Save the correctly classified examples to a pickle file
+            with open(os.path.join(self.config.save_dir, f"correctly_classified_test_samples.pkl"), 'wb') as f:
+                pickle.dump(correctly_classified_examples, f)
 
         # print test metrics
         print("Test Metrics:")
@@ -267,15 +272,16 @@ class XC_Epoch_Trainer(EpochTrainerBase):
 
         # if we use a hard-cbm, convert the predictions to binary
         tensor_C_pred = torch.sigmoid(tensor_C_pred)
-        if hard_cbm:
-            tensor_C_pred[tensor_C_pred >= 0.5] = 1
-            tensor_C_pred[tensor_C_pred < 0.5] = 0
+
+        tensor_C_pred_binarised = tensor_C_pred.clone()
+        tensor_C_pred_binarised[tensor_C_pred_binarised >= 0.5] = 1
+        tensor_C_pred_binarised[tensor_C_pred_binarised < 0.5] = 0
 
         # Calculate precision and recall per column
         precision_per_column = []
         recall_per_column = []
         all_labels = tensor_C.cpu().numpy()
-        all_preds = tensor_C_pred.cpu().numpy()
+        all_preds = tensor_C_pred_binarised.cpu().numpy()
 
         for i in range(all_labels.shape[1]):
             precision = precision_score(all_labels[:, i], all_preds[:, i])
@@ -313,6 +319,9 @@ class XC_Epoch_Trainer(EpochTrainerBase):
         # torch.save(tensor_y, os.path.join(output_path, f"test_tensor_y.pt"))
         # print(f"\nSaved test tensors in {output_path}")
 
+        if hard_cbm:
+            tensor_C_pred = tensor_C_pred_binarised
+
         return tensor_C_pred, tensor_y
 
     def _predict(self, X=None, data_loader=None, use_data_loader=True):
@@ -337,6 +346,7 @@ class XC_Epoch_Trainer(EpochTrainerBase):
 
                         # Forward pass
                         C_pred = self.model.concept_predictor(X_batch)
+                        C_pred = C_pred[:, self.arch.selected_concepts]
                         tensor_C_pred = torch.cat((tensor_C_pred, C_pred), dim=0)
                         tensor_y = torch.cat((tensor_y, y_batch), dim=0)
 
@@ -352,5 +362,6 @@ class XC_Epoch_Trainer(EpochTrainerBase):
             with torch.no_grad():
                 C_pred = self.model.concept_predictor(X)
 
+            C_pred = C_pred[:, self.arch.selected_concepts]
             C_pred = torch.sigmoid(C_pred).cpu().numpy()
             return C_pred

@@ -54,13 +54,26 @@ class MNISTCBMwithDTaslabelPredictorArchitecture:
         else:
             self.imbalance = None
 
-
-        concept_size = config["dataset"]["num_concepts"] - len(self.hard_concepts)
         self.concept_predictor = ConceptPredictor(config["dataset"]["num_concepts"])
         # self.label_predictor = DecisionTreeClassifier(min_samples_leaf=config["regularisation"]["min_samples_leaf"])
         self.label_predictor = CustomDecisionTree(min_samples_leaf=config["regularisation"]["min_samples_leaf"],
                                                   n_classes=config["dataset"]["num_classes"])
         self.model = MainNetwork(self.concept_predictor, self.label_predictor)
+
+        if "pretrained_concept_predictor" in config["model"]:
+            state_dict = torch.load(config["model"]["pretrained_concept_predictor"])["state_dict"]
+            # Create a new state dictionary for the concept predictor layers
+            concept_predictor_state_dict = {}
+
+            # Iterate through the original state dictionary and isolate concept predictor layers
+            for key, value in state_dict.items():
+                if key.startswith('concept_predictor'):
+                    # Remove the prefix "concept_predictor."
+                    new_key = key.replace('concept_predictor.', '')
+                    concept_predictor_state_dict[new_key] = value
+
+            self.model.concept_predictor.load_state_dict(concept_predictor_state_dict)
+            print("Loaded pretrained concept predictor from ", config["model"]["pretrained_concept_predictor"])
 
         # Define loss functions and optimizers
         self.criterion_concept = torch.nn.BCEWithLogitsLoss(weight=self.imbalance)
@@ -135,6 +148,21 @@ class MNISTCBMArchitecture:
                                               num_classes=config["dataset"]["num_classes"])
         self.model = MainNetwork(self.concept_predictor, self.label_predictor)
 
+        if "pretrained_concept_predictor" in config["model"]:
+            state_dict = torch.load(config["model"]["pretrained_concept_predictor"])["state_dict"]
+            # Create a new state dictionary for the concept predictor layers
+            concept_predictor_state_dict = {}
+
+            # Iterate through the original state dictionary and isolate concept predictor layers
+            for key, value in state_dict.items():
+                if key.startswith('concept_predictor'):
+                    # Remove the prefix "concept_predictor."
+                    new_key = key.replace('concept_predictor.', '')
+                    concept_predictor_state_dict[new_key] = value
+
+            self.model.concept_predictor.load_state_dict(concept_predictor_state_dict)
+            print("Loaded pretrained concept predictor from ", config["model"]["pretrained_concept_predictor"])
+
         # Define loss functions and optimizers
         self.criterion_concept = torch.nn.BCEWithLogitsLoss(weight=self.imbalance)
         self.criterion_per_concept = nn.BCEWithLogitsLoss(reduction='none')
@@ -179,7 +207,6 @@ class MNISTCBMSelectiveNetArchitecture:
                 self.imbalance = None
         else:
             self.imbalance = None
-
 
         concept_size = config["dataset"]["num_concepts"] - len(self.hard_concepts)
         self.concept_predictor = ConceptPredictor(concept_size)

@@ -20,7 +20,9 @@ def main(config):
 
     # setup data_loader instances
     dataloaders_module = importlib.import_module("data_loaders")
-    data_loader, valid_data_loader, test_data_loader = config.init_obj('data_loader', dataloaders_module)
+    data_loader, valid_data_loader, test_data_loader = config.init_obj(
+        'data_loader', dataloaders_module, config=config
+    )
 
     # prepare for (multi-device) GPU training
     device, device_ids = prepare_device(config['n_gpu'])

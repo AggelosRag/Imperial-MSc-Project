@@ -9,10 +9,11 @@ import utils
 
 class JointCBMLogger:
     def __init__(self, config, iteration, tb_path, output_path, train_loader,
-                 val_loader, device=None):
+                 val_loader, selectivenet=False, device=None):
         """
         Initialized each parameters of each run.
         """
+        self.selectivenet = selectivenet
         self.iteration = iteration
         if iteration is not None:
             self.tb_path = tb_path + '/joint_cbm_logger_expert_' + str(iteration)
@@ -46,6 +47,7 @@ class JointCBMLogger:
 
         self.class_counts_train = count_labels_per_class(y_all_train)
         self.class_counts_val = count_labels_per_class(y_all_val)
+        print("Class counts in val data: ",  self.class_counts_val)
 
         self.run_id = 0
         self.run_data = []
@@ -56,35 +58,51 @@ class JointCBMLogger:
         self.val_best_accuracy = 0
         self.best_val_loss = 1000000
         self.val_auroc = None
-        
-        self.attributes_per_epoch = {
-            "train_loss": 0,
-            "val_loss": 0,
-            "train_target_loss": 0,
-            "train_concept_loss": 0,
-            "val_target_loss": 0,
-            "val_concept_loss": 0,
-            "train_total_correct": 0,
-            "val_total_correct": 0,
-            "train_selective_loss": 0,
-            "train_emp_coverage": 0,
-            "train_CE_risk": 0,
-            "train_emp_risk": 0,
-            "train_cov_penalty": 0,
-            "train_aux_loss": 0,
-            "val_selective_loss": 0,
-            "val_emp_coverage": 0,
-            "val_CE_risk": 0,
-            "val_emp_risk": 0,
-            "val_cov_penalty": 0,
-            "val_aux_loss": 0,
-            "train_APL": 0,
-            "val_APL": 0,
-            "train_fidelity": 0,
-            "val_fidelity": 0,
-            "train_APL_predictions": 0,
-            "val_APL_predictions": 0,
-        }
+
+        if self.selectivenet:
+            self.attributes_per_epoch = {
+                "train_loss": 0,
+                "val_loss": 0,
+                "train_target_loss": 0,
+                "train_concept_loss": 0,
+                "val_target_loss": 0,
+                "val_concept_loss": 0,
+                "train_total_correct": 0,
+                "val_total_correct": 0,
+                "train_selective_loss": 0,
+                "train_emp_coverage": 0,
+                "train_CE_risk": 0,
+                "train_emp_risk": 0,
+                "train_cov_penalty": 0,
+                "train_aux_loss": 0,
+                "val_selective_loss": 0,
+                "val_emp_coverage": 0,
+                "val_CE_risk": 0,
+                "val_emp_risk": 0,
+                "val_cov_penalty": 0,
+                "val_aux_loss": 0,
+                "train_APL": 0,
+                "val_APL": 0,
+                "train_fidelity": 0,
+                "val_fidelity": 0,
+                "train_APL_predictions": 0,
+            }
+        else:
+            self.attributes_per_epoch = {
+                "train_loss": 0,
+                "val_loss": 0,
+                "train_target_loss": 0,
+                "train_concept_loss": 0,
+                "val_target_loss": 0,
+                "val_concept_loss": 0,
+                "train_total_correct": 0,
+                "val_total_correct": 0,
+                "train_APL": 0,
+                "val_APL": 0,
+                "train_fidelity": 0,
+                "val_fidelity": 0,
+                "train_APL_predictions": 0,
+            }
         # "train_n_selected": 0,
         # "train_n_rejected": 0,
         # "train_coverage": 0,
@@ -92,18 +110,21 @@ class JointCBMLogger:
         self.val_accuracy = None
         self.train_concept_accuracy = None
         self.val_concept_accuracy = None
-        self.val_correct_accuracy = 0
-        self.val_incorrect_accuracy = 0
-        self.val_correct = 0
-        self.val_n_selected = 0
-        self.val_n_rejected = 0
-        self.val_coverage = 0
+        if self.selectivenet:
+            self.val_correct_accuracy = 0
+            self.val_incorrect_accuracy = 0
+            self.val_correct = 0
+            self.val_n_selected = 0
+            self.val_n_rejected = 0
+            self.val_coverage = 0
 
-        self.tensor_attributes_per_epoch = {
-            "val_out_put_sel_proba": torch.FloatTensor().to(self.device),
-            "val_out_put_class": torch.FloatTensor().to(self.device),
-            "val_out_put_target": torch.FloatTensor().to(self.device),
-        }
+        if self.selectivenet:
+            self.tensor_attributes_per_epoch = {
+                "val_out_put_sel_proba": torch.FloatTensor().to(self.device),
+                "val_out_put_class": torch.FloatTensor().to(self.device),
+                "val_out_put_target": torch.FloatTensor().to(self.device),
+            }
+
         self.list_attributes_per_epoch = {
             "train_loss_per_concept": np.zeros(self.n_concepts),
             "val_loss_per_concept": np.zeros(self.n_concepts),
@@ -153,8 +174,9 @@ class JointCBMLogger:
     def begin_epoch(self):
         for key in self.attributes_per_epoch:
             self.attributes_per_epoch[key] = 0
-        for key in self.tensor_attributes_per_epoch:
-            self.tensor_attributes_per_epoch[key] = torch.FloatTensor().to(self.device)
+        if self.selectivenet:
+            for key in self.tensor_attributes_per_epoch:
+                self.tensor_attributes_per_epoch[key] = torch.FloatTensor().to(self.device)
         for key in self.list_attributes_per_epoch:
             self.list_attributes_per_epoch[key].fill(0)
 
@@ -162,12 +184,13 @@ class JointCBMLogger:
         self.val_accuracy = None
         self.train_concept_accuracy = None
         self.val_concept_accuracy = None
-        self.val_correct_accuracy = 0
-        self.val_incorrect_accuracy = 0
-        self.val_correct = 0
-        self.val_n_selected = 0
-        self.val_n_rejected = 0
-        self.val_coverage = 0
+        if self.selectivenet:
+            self.val_correct_accuracy = 0
+            self.val_incorrect_accuracy = 0
+            self.val_correct = 0
+            self.val_n_selected = 0
+            self.val_n_rejected = 0
+            self.val_coverage = 0
 
         self.train_accuracy_per_class = np.zeros(self.n_classes)
         self.val_accuracy_per_class = np.zeros(self.n_classes)
@@ -192,8 +215,9 @@ class JointCBMLogger:
             full_key = prefix + update_dict_or_key
             if full_key in self.attributes_per_epoch:
                 self.attributes_per_epoch[full_key] += value * batch_size
-            elif full_key in self.tensor_attributes_per_epoch:
-                self.tensor_attributes_per_epoch[full_key] = torch.cat((self.tensor_attributes_per_epoch[full_key], value), dim=0)
+            elif self.selectivenet:
+                if full_key in self.tensor_attributes_per_epoch:
+                    self.tensor_attributes_per_epoch[full_key] = torch.cat((self.tensor_attributes_per_epoch[full_key], value), dim=0)
             elif full_key in self.list_attributes_per_epoch:
                 self.list_attributes_per_epoch[full_key] += np.array([x * batch_size for x in value])
         else:
@@ -283,7 +307,6 @@ class JointCBMLogger:
         self.tb.add_scalar("CY_Logger/Val_Fidelity", self.attributes_per_epoch['val_fidelity'], self.epoch_id)
 
         self.tb.add_scalar("CY_Logger/Train_APL_predictions", self.attributes_per_epoch['train_APL_predictions'], self.epoch_id)
-        self.tb.add_scalar("CY_Logger/Val_APL_predictions", self.attributes_per_epoch['val_APL_predictions'], self.epoch_id)
 
         # report class accuracies
         for i in range(self.n_classes):
@@ -565,12 +588,13 @@ class JointCBMLogger:
         performance_dict['val_accuracy'] = self.val_accuracy
         performance_dict['train_concept_accuracy'] = self.train_concept_accuracy
         performance_dict['val_concept_accuracy'] = self.val_concept_accuracy
-        performance_dict['val_correct_accuracy'] = self.val_correct_accuracy
-        performance_dict['val_incorrect_accuracy'] = self.val_incorrect_accuracy
-        performance_dict['val_correct'] = self.val_correct
-        performance_dict['val_n_selected'] = self.val_n_selected
-        performance_dict['val_n_rejected'] = self.val_n_rejected
-        performance_dict['val_coverage'] = self.val_coverage
+        if self.selectivenet:
+            performance_dict['val_correct_accuracy'] = self.val_correct_accuracy
+            performance_dict['val_incorrect_accuracy'] = self.val_incorrect_accuracy
+            performance_dict['val_correct'] = self.val_correct
+            performance_dict['val_n_selected'] = self.val_n_selected
+            performance_dict['val_n_rejected'] = self.val_n_rejected
+            performance_dict['val_coverage'] = self.val_coverage
 
         performance_dict['train_accuracy_per_class'] = self.train_accuracy_per_class
         performance_dict['val_accuracy_per_class'] = self.val_accuracy_per_class

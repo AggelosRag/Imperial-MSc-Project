@@ -58,8 +58,8 @@ class CUBCBMwithDTaslabelPredictorArchitecture:
             print("Loaded pretrained concept predictor from ", config["model"]["pretrained_concept_predictor"])
 
         # Define loss functions and optimizers
-        self.criterion_concept = torch.nn.BCEWithLogitsLoss(weight=self.imbalance)
-        self.criterion_per_concept = nn.BCEWithLogitsLoss(reduction='none')  # BCE Loss for binary concepts
+        self.criterion_concept = torch.nn.BCELoss(weight=self.imbalance)
+        self.criterion_per_concept = nn.BCELoss(reduction='none')  # BCE Loss for binary concepts
 
         params_to_update = [
             {'params': self.model.concept_predictor.parameters(),
@@ -121,8 +121,8 @@ class CUBCBMArchitecture:
             print("Loaded pretrained concept predictor from ", config["model"]["pretrained_concept_predictor"])
 
         # Define loss functions and optimizers
-        self.criterion_concept = torch.nn.BCEWithLogitsLoss(weight=self.imbalance)
-        self.criterion_per_concept = nn.BCEWithLogitsLoss(reduction='none')  # BCE Loss for binary concepts
+        self.criterion_concept = torch.nn.BCELoss(weight=self.imbalance)
+        self.criterion_per_concept = nn.BCELoss(reduction='none')  # BCE Loss for binary concepts
         self.criterion_label = CELoss()
 
         if "weight_decay" not in config["model"]:

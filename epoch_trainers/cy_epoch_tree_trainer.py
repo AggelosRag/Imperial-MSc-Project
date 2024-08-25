@@ -36,6 +36,7 @@ class CY_Epoch_Tree_Trainer(EpochTrainerBase):
                                         output_path=str(self.config.save_dir),
                                         train_loader=self.train_loader,
                                         val_loader=self.val_loader,
+                                        selectivenet=False,
                                         device=self.device)
         self.metrics_tracker.begin_run()
 

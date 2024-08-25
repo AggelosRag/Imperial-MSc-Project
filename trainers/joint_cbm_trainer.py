@@ -25,10 +25,8 @@ class JointCBMTrainer:
             self.epoch_trainer = XCY_Tree_Epoch_Trainer(
                 self.arch, self.config,
                 self.device, self.data_loader,
-                'joint',
                 self.valid_data_loader,
-                self.iteration
-            )
+                self.iteration)
         else:
             self.epoch_trainer = XCY_Epoch_Trainer(self.arch, self.config,
                                                    self.device,

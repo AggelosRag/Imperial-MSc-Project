@@ -19,6 +19,16 @@ class CELoss(nn.Module):
         loss = self.criterion(input, target)
         return {"target_loss": loss}
 
+class BCEWithLogitsLoss(nn.Module):
+    def __init__(self, reduction='mean', weight=None):
+        super(BCEWithLogitsLoss, self).__init__()
+        self.criterion = torch.nn.BCEWithLogitsLoss()
+
+    def forward(self, input, target):
+        input = input["prediction_out"]
+        loss = self.criterion(input, target)
+        return {"target_loss": loss}
+
 class SelectiveNetLoss(torch.nn.Module):
     def __init__(
             self, iteration, CE, selection_threshold, lm, alpha, coverage: float,

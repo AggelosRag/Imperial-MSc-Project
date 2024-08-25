@@ -2,6 +2,7 @@ import torch.utils.data
 from matplotlib import pyplot as plt
 
 from epoch_trainers.xy_epoch_trainer import XY_Epoch_Trainer
+from epoch_trainers.xy_epoch_tree_trainer import XY_Epoch_Tree_Trainer
 
 
 class BlackBoxXYTrainer:
@@ -18,14 +19,24 @@ class BlackBoxXYTrainer:
         self.epochs = config['trainer']['epochs']
 
         # create a new dataloader for the c->y model
-        train_data_loader, val_data_loader = self.create_xy_dataloaders()
+        if self.config["arch"]["type"] == 'ParabolaArchitecture':
+            train_data_loader = data_loader
+            val_data_loader = valid_data_loader
+        else:
+            train_data_loader, val_data_loader = self.create_xy_dataloaders()
 
         # define the trainer
         self.reg = reg
-        self.epoch_trainer = XY_Epoch_Trainer(
-            self.arch, self.config,
-            self.device, train_data_loader,
-            val_data_loader)
+        if self.reg == 'Tree':
+            self.epoch_trainer = XY_Epoch_Tree_Trainer(
+                self.arch, self.config,
+                self.device, train_data_loader,
+                val_data_loader)
+        else:
+            self.epoch_trainer = XY_Epoch_Trainer(
+                self.arch, self.config,
+                self.device, train_data_loader,
+                val_data_loader)
 
     def train(self):
 

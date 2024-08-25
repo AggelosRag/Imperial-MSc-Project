@@ -1,5 +1,5 @@
 {
-    "name": "cbm_mnist_L2_0_joint_alpha=1_bs=206",
+    "name": "final_cbm_mnist_joint_alpha=1",
     "n_gpu": 1,
 
     "arch": {
@@ -18,25 +18,26 @@
                          "width_small", "width_medium", "width_large", "width_xlarge",
                          "length_small", "length_medium", "length_large", "length_xlarge"],
         "class_names": ["6", "8", "9"],
-        "contour_plot": 0
+        "contour_plot": false,
+        "use_attribute_imbalance": false
     },
     "data_loader": {
-        "type": "get_mnist_dataLoader",
+        "type": "get_mnist_dataLoader_original",
         "args":{
             "data_dir": "./datasets/MNIST",
             "type": "SGD",
-            "batch_size": 206
+            "batch_size": 8859
         }
     },
     "trainer": {
         "type": "JointCBMTrainer",
         "args": {},
-        "epochs": 30,
+        "epochs": 500,
         "save_dir": "saved/",
         "save_period": 1000,
         "verbosity": 2,
         "monitor": "off",
-        "early_stop": 10,
+        "early_stop": 0,
         "tensorboard": true
     },
     "regularisation": {

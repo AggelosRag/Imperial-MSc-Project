@@ -11,6 +11,7 @@ import importlib
 # fix random seeds for reproducibility
 SEED = 42
 torch.manual_seed(SEED)
+torch.random.manual_seed(SEED)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 np.random.seed(SEED)

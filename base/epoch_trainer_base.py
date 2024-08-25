@@ -2,15 +2,15 @@ import os
 
 import numpy as np
 import graphviz
+import torch
 from sklearn.metrics import accuracy_score
 from sklearn.tree import DecisionTreeClassifier, export_graphviz
 
 from base import TrainerBase
-from utils.tree_utils import prune
 from networks.custom_decision_with_fixed_top_nodes import CustomDecisionTree, tree_to_dict, \
     export_tree
 from utils.tree_utils import get_light_colors, replace_splits, \
-    modify_dot_with_colors
+    modify_dot_with_colors, weighted_node_count
 
 
 class EpochTrainerBase(TrainerBase):
@@ -22,7 +22,6 @@ class EpochTrainerBase(TrainerBase):
         self.reduced_class_names = self.or_class_names
         self.config = config
         self.expert = expert
-        # self.or_colors = list(mcolors.CSS4_COLORS.values())[:len(self.or_class_names)]
         self.or_colors = get_light_colors(len(self.or_class_names))
 
     def _train_epoch(self, epoch):
@@ -31,15 +30,17 @@ class EpochTrainerBase(TrainerBase):
     def _valid_epoch(self, epoch):
         raise NotImplementedError
 
-    def _calculate_APL(self, min_samples_leaf, C_pred, outputs):
+    def _calculate_APL(self, min_samples_leaf, inputs, outputs):
 
-        tree = DecisionTreeClassifier(min_samples_leaf=min_samples_leaf)
-        C_pred = C_pred.detach().cpu().numpy()
-        outputs = outputs.detach().cpu().numpy()
+        tree = DecisionTreeClassifier(min_samples_leaf=min_samples_leaf, random_state=42)
+        inputs = inputs.detach().cpu().numpy()
 
         if outputs.shape[1] == 1:
+            outputs = torch.sigmoid(outputs)
+            outputs = outputs.detach().cpu().numpy()
             preds = np.where(outputs > 0.5, 1, 0).reshape(-1)
         elif outputs.shape[1] >= 3:
+            outputs = outputs.detach().cpu().numpy()
             preds = np.argmax(outputs, axis=1)
         else:
             raise ValueError('Invalid number of output classes')
@@ -48,32 +49,17 @@ class EpochTrainerBase(TrainerBase):
         self.reduced_colors = [self.or_colors[i] for i in self.class_mapping if i in preds]
         self.reduced_colors_dict = {i: self.reduced_colors[i] for i in range(len(self.reduced_class_names))}
 
-        tree.fit(C_pred, preds)
-        # tree = reduced_error_prune(tree, C_val, y_val)
-        # tree_train = reduced_error_prune(tree_train, C_pred, y_train)
-        y_pred = tree.predict(C_pred)
+        tree.fit(inputs, preds)
+        y_pred = tree.predict(inputs)
         fid = accuracy_score(preds, y_pred)
-        #print(f'Fidelity {mode}: {fid}')
 
-        # path_length = 0
-        # for c in C_pred:
-        #     path_length += tree_train.decision_path([c]).toarray().sum()
-        # print(f'Train: Average path length: {path_length / len(C_pred)}')
-
-        # Get the total number of nodes
-        total_nodes = tree.tree_.node_count
-        #print(f'Total number of nodes {mode}: {total_nodes}')
-
-        # preds = np.eye(3)[preds]
-        # p_l = get_path_length(torch.tensor(C_pred, dtype=torch.float32),
-        #                       torch.tensor(preds, dtype=torch.long),
-        #                       min_samples_leaf=min_samples_leaf)
-        # print(f'Train: Average path length2: {p_l}')
-
-        # prune tree
-        APL = tree.tree_.node_count
-        prune(tree.tree_)
-        # APL = path_length / len(C_pred)
+        if "tree_apl_type" in self.config['regularisation']:
+            if self.config['regularisation']['tree_apl_type'] == 'weighted_node_count':
+                APL = weighted_node_count(tree, inputs)
+            else:
+                APL = tree.tree_.node_count
+        else:
+            APL = tree.tree_.node_count
 
         return APL, fid, list(tree.feature_importances_), tree
 
@@ -81,8 +67,6 @@ class EpochTrainerBase(TrainerBase):
                         mode, iteration=None):
 
         # export tree
-        # plot_tree(model, filled=True)
-        #dot_data = StringIO()
         dot_data = export_graphviz(
             decision_tree=tree,
             out_file=None,
@@ -90,10 +74,8 @@ class EpochTrainerBase(TrainerBase):
             rounded=True,
             special_characters=True,
             feature_names=config['dataset']['concept_names'],
-            class_names=self.reduced_class_names,
+            #class_names=self.reduced_class_names,
         )
-
-        # graph = pydotplus.graph_from_dot_data(dot_data.getvalue())
 
         fig_path = str(self.config.log_dir) + '/trees'
         if not os.path.exists(fig_path):
@@ -107,16 +89,14 @@ class EpochTrainerBase(TrainerBase):
         else:
             name = f'mode_{mode}_epoch_{epoch}_nodes_{APL}'
 
-        # graph.write_png(fig_path + name)
-        # Image(graph.create_png())
-
         # Modify the dot data to include the specific colors
-        dot_data_with_colors = replace_splits(dot_data)
-        dot_data_with_colors = modify_dot_with_colors(
-            dot_data_with_colors, self.reduced_colors_dict, tree.tree_
-        )
-        # Render the graph
-        graph = graphviz.Source(dot_data_with_colors, directory=fig_path)
+        # dot_data_with_colors = replace_splits(dot_data)
+        # dot_data_with_colors = modify_dot_with_colors(
+        #     dot_data_with_colors, self.reduced_colors_dict, tree.tree_
+        # )
+        # # Render the graph
+        # graph = graphviz.Source(dot_data_with_colors, directory=fig_path)
+        graph = graphviz.Source(dot_data, directory=fig_path)
         graph.render(name, format="pdf", cleanup=True)
 
     def _build_tree_with_fixed_roots(self, min_samples_leaf, C_pred, outputs,

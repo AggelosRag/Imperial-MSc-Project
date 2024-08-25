@@ -28,24 +28,27 @@ def pred_contours(x, y, model, device):
     data = np.c_[x.ravel(), y.ravel()]
     y_pred = []
 
-    for d in data:
-        y_hat = model(torch.tensor(d, dtype=torch.float, device=device))
-        # y_hat = model(torch.tensor(d, dtype=torch.float, device='cuda:0'))
-        y_pred.append(y_hat.detach().cpu().numpy())
+    model.eval()
+    with torch.no_grad():
+        for d in data:
+            y_hat = model(torch.tensor(d, dtype=torch.float, device=device))
+            # y_hat = model(torch.tensor(d, dtype=torch.float, device='cuda:0'))
+            y_pred.append(y_hat.detach().cpu().numpy())
 
-    y_pred = np.array(y_pred)
-    if y_pred.shape[1] == 1:
-        # apply sigmoid
-        y_pred = torch.sigmoid(torch.tensor(y_pred, dtype=torch.float, device=device)).detach().cpu().numpy()
-        y_pred = np.where(y_pred > 0.5, 1, 0)
-    else:
-        # apply softmax
-        y_pred = np.argmax(y_pred, 1)
+        y_pred = np.array(y_pred)
+        if y_pred.shape[1] == 1:
+            # apply sigmoid
+            y_pred = torch.sigmoid(torch.tensor(y_pred, dtype=torch.float, device=device)).detach().cpu().numpy()
+            y_pred = np.where(y_pred > 0.5, 1, 0)
+        else:
+            # apply softmax
+            y_pred = np.argmax(y_pred, 1)
 
+    model.train()
     return y_pred, data
 
 
-def model_contour_plot(space, model, plot_title, fig_file_name, X=None, y=None,
+def model_contour_plot(model, plot_title, fig_file_name, X=None, y=None,
                        device='None'):
     """
     Draw contour plot for deep model.
@@ -66,23 +69,35 @@ def model_contour_plot(space, model, plot_title, fig_file_name, X=None, y=None,
     y: Labels, default None
     """
 
-    xx, yy = np.linspace(space[0][0], space[0][1], 100), np.linspace(space[1][0], space[1][1], 100)
-    xx, yy = np.meshgrid(xx, yy)
-    Z, _ = pred_contours(xx, yy, model, device)
-    Z = Z.reshape(xx.shape)
+    grid_xlim = [0, 1]
+    grid_ylim = [0, 1]
+    space = [grid_xlim, grid_ylim]
 
-    fig = plt.figure()
-    CS = plt.contourf(xx, yy, Z, cmap=plt.cm.RdYlBu)
-    #plt.colorbar()
-    # plt.contour(xx, yy, Z, CS.levels, colors='k', linewidths=1.5)
-    if X is not None:
-        plt.scatter(*X.T, c=colormap(y), edgecolors='k')
-    plt.xlim([space[0][0], space[0][1]])
-    plt.ylim([space[1][0], space[1][1]])
-    plt.title(plot_title)
-    #fig.tight_layout()
-    plt.savefig(fig_file_name)
-    plt.close(fig)
+    # xx, yy = np.linspace(space[0][0], space[0][1], 100), np.linspace(space[1][0], space[1][1], 100)
+    # xx, yy = np.meshgrid(xx, yy)
+    # Z, _ = pred_contours(xx, yy, model, device)
+    # Z = Z.reshape(xx.shape)
+    #
+    # fig = plt.figure()
+    # CS = plt.contourf(xx, yy, Z, cmap=plt.cm.RdYlBu)
+    # if X is not None:
+    #     plt.scatter(*X.T, c=colormap(y), edgecolors='k')
+    # plt.xlim([space[0][0], space[0][1]])
+    # plt.ylim([space[1][0], space[1][1]])
+    # plt.title(plot_title)
+    # plt.savefig(fig_file_name)
+    # plt.close(fig)
+    #
+    # fig_file_name = fig_file_name + '2.png'
+
+    model.eval()
+    with torch.no_grad():
+        y_pred = model(torch.tensor(X, dtype=torch.float, device=device))
+        y_pred = torch.sigmoid(torch.tensor(y_pred, dtype=torch.float, device=device)).detach().cpu().numpy()
+        y_pred = np.where(y_pred > 0.5, 1, 0)
+
+    plot_data_and_decision_function(y_pred, model, X, y, grid_xlim, grid_ylim,
+                                    device=device, save_path=fig_file_name)
 
 
 def plot_tree(clf, space, path_contour, path_tree, epoch,
@@ -141,65 +156,64 @@ def plot_data(X_train, y_train, x_decision_fun, y_decision_fun,
     # data_summary = f'Training data shape: {X_train.shape}  \nValidation data shape: {X_val.shape}, \nTest data shape: {X_test.shape}'
     # writer.add_text('Training data Summary', data_summary)
 
-def plot_data_and_decision_function(trainer, inputs, targets,
+def plot_data_and_decision_function(preds, trainer, inputs, targets,
                                     grid_xlim, grid_ylim,
-                                    tree_reg=1.0, save_path=None):
+                                    device, save_path=None):
 
-    preds_proba = trainer.predict(inputs)[0, :]
-    preds = np.rint(preds_proba)
+    inputs = inputs.T
     xx, yy = np.meshgrid(np.arange(grid_xlim[0], grid_xlim[1], 0.01),
                          np.arange(grid_ylim[0], grid_ylim[1], 0.01))
-    Z = np.rint(trainer.predict(np.c_[xx.ravel(), yy.ravel()].T))
+    Z, _ = pred_contours(xx, yy, trainer, device)
     Z = Z.reshape(xx.shape)
-    plt.figure(figsize=(5, 5))
+    plt.figure(figsize=(7, 7))
     plt.plot(
         [
             inputs[0, i] for i in range(inputs.shape[1])
-            if targets[0, i] == 1 and preds[i] == 1
+            if targets[i] == 1 and preds[i] == 1
         ],
         [
             inputs[1, i] for i in range(inputs.shape[1])
-            if targets[0, i] == 1 and preds[i] == 1
+            if targets[i] == 1 and preds[i] == 1
         ],
         'o', color='red', label='true positives'
     )
     plt.plot(
         [
             inputs[0,i] for i in range(inputs.shape[1])
-            if targets[0, i] == 0 and preds[i] == 0
+            if targets[i] == 0 and preds[i] == 0
         ],
         [
             inputs[1,i] for i in range(inputs.shape[1])
-            if targets[0, i] == 0 and preds[i] == 0
+            if targets[i] == 0 and preds[i] == 0
         ],
         'o', color='orange', label='true negatives'
     )
     plt.plot(
         [
             inputs[0, i] for i in range(inputs.shape[1])
-            if targets[0, i] == 0 and preds[i] == 1
+            if targets[i] == 0 and preds[i] == 1
         ],
         [
             inputs[1, i] for i in range(inputs.shape[1])
-            if targets[0, i] == 0 and preds[i] == 1
+            if targets[i] == 0 and preds[i] == 1
         ],
         'o', color='blue', label='false positives'
     )
     plt.plot(
         [
             inputs[0, i] for i in range(inputs.shape[1])
-            if targets[0, i] == 1 and preds[i] == 0
+            if targets[i] == 1 and preds[i] == 0
         ],
         [
             inputs[1, i] for i in range(inputs.shape[1])
-            if targets[0, i] == 1 and preds[i] == 0
+            if targets[i] == 1 and preds[i] == 0
         ],
         'o', color='green', label='false negatives'
     )
     plt.ylim(grid_ylim)
     plt.xlim(grid_xlim)
     plt.contour(xx, yy, Z)
-    plt.legend(bbox_to_anchor=(1, 1), loc=2, borderaxespad=0.)
+    plt.legend(loc=4)
     plt.show() if save_path is None else plt.savefig(save_path)
 
 def plot(X, y, fun, error, space):

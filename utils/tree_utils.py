@@ -541,41 +541,6 @@ def find_highest_similarity_pair(trees_list1, trees_list2, feature_names):
     return best_pair, max_similarity, best_feature_name
 
 
-def prune(tree):
-    def is_leaf(node):
-        return (tree.children_left[node] == _tree.TREE_LEAF and
-                tree.children_right[node] == _tree.TREE_LEAF)
-
-    def can_prune(node):
-        left_child = tree.children_left[node]
-        right_child = tree.children_right[node]
-
-        if is_leaf(left_child) and is_leaf(right_child):
-            left_class = np.argmax(tree.value[left_child])
-            right_class = np.argmax(tree.value[right_child])
-            return left_class == right_class
-
-        return False
-
-    def prune_nodes(node):
-        if node == _tree.TREE_LEAF:
-            return
-
-        left_child = tree.children_left[node]
-        right_child = tree.children_right[node]
-
-        prune_nodes(left_child)
-        prune_nodes(right_child)
-
-        if can_prune(node):
-            tree.children_left[node] = _tree.TREE_LEAF
-            tree.children_right[node] = _tree.TREE_LEAF
-            tree.feature[node] = -2  # Set feature to undefined
-            tree.threshold[node] = -2.0  # Set threshold to undefined
-
-    prune_nodes(0)
-
-
 def print_tree_splits(tree, feature_names, class_names):
     def traverse(node, depth):
         indent = "  " * depth
@@ -591,3 +556,12 @@ def print_tree_splits(tree, feature_names, class_names):
             traverse(tree.children_right[node], depth + 1)
 
     traverse(0, 0)
+
+
+def weighted_node_count(tree, X_train):
+    """Weighted node count by example"""
+    leaf_indices = tree.apply(X_train)
+    leaf_counts = np.bincount(leaf_indices)
+    leaf_i = np.arange(tree.tree_.node_count)
+    node_count = np.dot(leaf_i, leaf_counts) / float(X_train.shape[0])
+    return node_count

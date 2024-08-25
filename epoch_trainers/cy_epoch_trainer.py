@@ -40,20 +40,22 @@ class CY_Epoch_Trainer(EpochTrainerBase):
 
         self.do_validation = self.val_loader is not None
 
-        self.metrics_tracker = CYLogger(config, expert=expert,
-                                      tb_path=str(self.config.log_dir),
-                                      output_path=str(self.config.save_dir),
-                                      train_loader=self.train_loader,
-                                      val_loader=self.val_loader,
-                                      device=self.device)
-        self.metrics_tracker.begin_run()
-        print("Device: ", self.device)
-
         # check if selective net is used
         if "selectivenet" in config.config.keys():
             self.selective_net = True
         else:
             self.selective_net = False
+
+        self.metrics_tracker = CYLogger(config, expert=expert,
+                                        tb_path=str(self.config.log_dir),
+                                        output_path=str(self.config.save_dir),
+                                        train_loader=self.train_loader,
+                                        val_loader=self.val_loader,
+                                        selectivenet=self.selective_net,
+                                        device=self.device)
+
+        self.metrics_tracker.begin_run()
+        print("Device: ", self.device)
 
         self.optimizer = arch.cy_optimizer
         for state in self.optimizer.state.values():

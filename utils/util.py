@@ -49,7 +49,7 @@ def prepare_device(n_gpu_use):
     return device, list_ids
 
 def get_correct(y_hat, y, num_classes):
-    if num_classes == 1:
+    if num_classes == 2:
         y_hat = torch.sigmoid(y_hat)
         y_hat = [1 if y_hat[i] >= 0.5 else 0 for i in range(len(y_hat))]
         correct = [1 if y_hat[i] == y[i] else 0 for i in range(len(y_hat))]
@@ -71,7 +71,7 @@ def correct_predictions_per_class(logits, true_labels, num_classes,
     Returns:
     list: A list containing the number of correct predictions for each class.
     """
-    if num_classes == 1:
+    if num_classes == 2:
         # Binary classification case
         probabilities = torch.sigmoid(logits)
         predicted_classes = torch.where(probabilities >= threshold, 1, 0)

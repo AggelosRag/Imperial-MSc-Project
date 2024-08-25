@@ -9,10 +9,11 @@ import utils
 
 class XYLogger:
     def __init__(self, config, expert, tb_path, output_path, train_loader,
-                 val_loader, device=None):
+                 val_loader, selectivenet=False, device=None):
         """
         Initialized each parameters of each run.
         """
+        self.selectivenet = selectivenet
         self.expert = expert
         if expert is not None:
             self.tb_path = tb_path + '/xy_logger_expert_' + str(expert)
@@ -27,10 +28,22 @@ class XYLogger:
         self.best_epoch_id = 0
 
         self.n_classes = config['dataset']['num_classes']
+        self.n_features = config['dataset']['num_features']
         self.class_names = config['dataset']['class_names']
 
-        y_all_train = self.train_loader.dataset[:][1]
-        y_all_val = self.val_loader.dataset[:][1]
+        if isinstance(train_loader.dataset, torch.utils.data.TensorDataset):
+            y_all_train = self.train_loader.dataset[:][1]
+            y_all_val = self.val_loader.dataset[:][1]
+        else:
+            y_all_train = []
+            y_all_val = []
+            for i in train_loader.data:
+                y_all_train.append(i['class_label'])
+            for i in val_loader.data:
+                y_all_val.append(i['class_label'])
+            y_all_train = torch.tensor(y_all_train)
+            y_all_val = torch.tensor(y_all_val)
+
         self.class_counts_train = count_labels_per_class(y_all_train)
         self.class_counts_val = count_labels_per_class(y_all_val)
         print("Class counts in val data: ",  self.class_counts_val)
@@ -45,43 +58,71 @@ class XYLogger:
         self.best_val_loss = 1000000
         self.val_auroc = None
 
-        self.attributes_per_epoch = {
-            "train_loss": 0,
-            "val_loss": 0,
-            "train_target_loss": 0,
-            "val_target_loss": 0,
-            "train_total_correct": 0,
-            "val_total_correct": 0,
-            "train_selective_loss": 0,
-            "train_emp_coverage": 0,
-            "train_CE_risk": 0,
-            "train_emp_risk": 0,
-            "train_cov_penalty": 0,
-            "train_aux_loss": 0,
-            "val_selective_loss": 0,
-            "val_emp_coverage": 0,
-            "val_CE_risk": 0,
-            "val_emp_risk": 0,
-            "val_cov_penalty": 0,
-            "val_aux_loss": 0,
-        }
+        if self.selectivenet:
+            self.attributes_per_epoch = {
+                "train_loss": 0,
+                "val_loss": 0,
+                "train_target_loss": 0,
+                "val_target_loss": 0,
+                "train_total_correct": 0,
+                "val_total_correct": 0,
+                "train_selective_loss": 0,
+                "train_emp_coverage": 0,
+                "train_CE_risk": 0,
+                "train_emp_risk": 0,
+                "train_cov_penalty": 0,
+                "train_aux_loss": 0,
+                "val_selective_loss": 0,
+                "val_emp_coverage": 0,
+                "val_CE_risk": 0,
+                "val_emp_risk": 0,
+                "val_cov_penalty": 0,
+                "val_aux_loss": 0,
+                "train_APL": 0,
+                "val_APL": 0,
+                "train_fidelity": 0,
+                "val_fidelity": 0,
+                "train_APL_predictions": 0,
+            }
+        else:
+            self.attributes_per_epoch = {
+                "train_loss": 0,
+                "val_loss": 0,
+                "train_target_loss": 0,
+                "val_target_loss": 0,
+                "train_total_correct": 0,
+                "val_total_correct": 0,
+                "train_APL": 0,
+                "val_APL": 0,
+                "train_fidelity": 0,
+                "val_fidelity": 0,
+                "train_APL_predictions": 0,
+            }
         # "train_n_selected": 0,
         # "train_n_rejected": 0,
         # "train_coverage": 0,
         self.train_accuracy = None
         self.val_accuracy = None
-        self.val_correct_accuracy = 0
-        self.val_incorrect_accuracy = 0
-        self.val_correct = 0
-        self.val_n_selected = 0
-        self.val_n_rejected = 0
-        self.val_coverage = 0
+        if self.selectivenet:
+            self.val_correct_accuracy = 0
+            self.val_incorrect_accuracy = 0
+            self.val_correct = 0
+            self.val_n_selected = 0
+            self.val_n_rejected = 0
+            self.val_coverage = 0
 
-        self.tensor_attributes_per_epoch = {
-            "val_out_put_sel_proba": torch.FloatTensor().to(self.device),
-            "val_out_put_class": torch.FloatTensor().to(self.device),
-            "val_out_put_target": torch.FloatTensor().to(self.device),
+        if self.selectivenet:
+            self.tensor_attributes_per_epoch = {
+                "val_out_put_sel_proba": torch.FloatTensor().to(self.device),
+                "val_out_put_class": torch.FloatTensor().to(self.device),
+                "val_out_put_target": torch.FloatTensor().to(self.device),
+            }
+
+        self.list_attributes_per_epoch = {
+            "train_feature_importance": np.zeros(self.n_features),
+            "val_feature_importance": np.zeros(self.n_features),
         }
+
         self.train_accuracy_per_class = np.zeros(self.n_classes)
         self.val_accuracy_per_class = np.zeros(self.n_classes)
 
@@ -90,7 +131,8 @@ class XYLogger:
         self.all_epoch_attributes["train_accuracy"] = []
         self.all_epoch_attributes["val_accuracy"] = []
 
-        self.all_epoch_list_attributes = {}
+        self.all_epoch_list_attributes = {key: [] for key in
+                                          self.list_attributes_per_epoch}
         self.all_epoch_list_attributes["train_accuracy_per_class"] = []
         self.all_epoch_list_attributes["val_accuracy_per_class"] = []
 
@@ -122,18 +164,22 @@ class XYLogger:
     def begin_epoch(self):
         for key in self.attributes_per_epoch:
             self.attributes_per_epoch[key] = 0
-        for key in self.tensor_attributes_per_epoch:
-            self.tensor_attributes_per_epoch[key] = torch.FloatTensor().to(
-                self.device)
+        if self.selectivenet:
+            for key in self.tensor_attributes_per_epoch:
+                self.tensor_attributes_per_epoch[key] = torch.FloatTensor().to(
+                    self.device)
+        for key in self.list_attributes_per_epoch:
+            self.list_attributes_per_epoch[key].fill(0)
 
         self.train_accuracy = None
         self.val_accuracy = None
-        self.val_correct_accuracy = 0
-        self.val_incorrect_accuracy = 0
-        self.val_correct = 0
-        self.val_n_selected = 0
-        self.val_n_rejected = 0
-        self.val_coverage = 0
+        if self.selectivenet:
+            self.val_correct_accuracy = 0
+            self.val_incorrect_accuracy = 0
+            self.val_correct = 0
+            self.val_n_selected = 0
+            self.val_n_rejected = 0
+            self.val_coverage = 0
 
         self.train_accuracy_per_class = np.zeros(self.n_classes)
         self.val_accuracy_per_class = np.zeros(self.n_classes)
@@ -154,13 +200,21 @@ class XYLogger:
                     self.tensor_attributes_per_epoch[full_key] = torch.cat(
                         (self.tensor_attributes_per_epoch[full_key], val),
                         dim=0)
+                elif full_key in self.list_attributes_per_epoch:
+                    val = val.detach()
+                    self.list_attributes_per_epoch[full_key] += np.array(
+                        [x * batch_size for x in val])
         elif isinstance(update_dict_or_key, str) and value is not None:
             full_key = prefix + update_dict_or_key
             if full_key in self.attributes_per_epoch:
                 self.attributes_per_epoch[full_key] += value * batch_size
-            elif full_key in self.tensor_attributes_per_epoch:
-                self.tensor_attributes_per_epoch[full_key] = torch.cat(
-                    (self.tensor_attributes_per_epoch[full_key], value), dim=0)
+            elif self.selectivenet:
+                if full_key in self.tensor_attributes_per_epoch:
+                    self.tensor_attributes_per_epoch[full_key] = torch.cat(
+                        (self.tensor_attributes_per_epoch[full_key], value), dim=0)
+            elif full_key in self.list_attributes_per_epoch:
+                self.list_attributes_per_epoch[full_key] += np.array(
+                    [x * batch_size for x in value])
         else:
             raise ValueError(
                 "Invalid input: expected a dictionary or a key-value pair")
@@ -184,6 +238,16 @@ class XYLogger:
         self.all_epoch_list_attributes["val_accuracy_per_class"].append(
             (self.val_accuracy_per_class).tolist())
 
+        for key in self.list_attributes_per_epoch:
+            if key.startswith("train_"):
+                dataset_length = len(self.train_loader.dataset)
+            elif key.startswith("val_"):
+                dataset_length = len(self.val_loader.dataset)
+            else:
+                raise ValueError("Invalid key")
+            self.list_attributes_per_epoch[key] = self.list_attributes_per_epoch[key] / dataset_length
+            self.all_epoch_list_attributes[key].append((self.list_attributes_per_epoch[key]).tolist())
+
         for key in self.attributes_per_epoch:
             if key.startswith("train_"):
                 dataset_length = len(self.train_loader.dataset)
@@ -205,6 +269,29 @@ class XYLogger:
                            self.epoch_id)
         self.tb.add_scalar("XY_Logger/Val_Loss",
                            self.attributes_per_epoch['val_loss'], self.epoch_id)
+
+        self.tb.add_scalar("XY_Logger/Train_Target_Loss",
+                            self.attributes_per_epoch['train_target_loss'],
+                            self.epoch_id)
+        self.tb.add_scalar("XY_Logger/Val_Target_Loss",
+                           self.attributes_per_epoch['val_target_loss'], self.epoch_id)
+
+        self.tb.add_scalar("XY_Logger/Train_APL",
+                           self.attributes_per_epoch['train_APL'],
+                           self.epoch_id)
+        self.tb.add_scalar("XY_Logger/Val_APL",
+                           self.attributes_per_epoch['val_APL'], self.epoch_id)
+
+        self.tb.add_scalar("XY_Logger/Train_Fidelity",
+                           self.attributes_per_epoch['train_fidelity'],
+                           self.epoch_id)
+        self.tb.add_scalar("XY_Logger/Val_Fidelity",
+                           self.attributes_per_epoch['val_fidelity'],
+                           self.epoch_id)
+
+        self.tb.add_scalar("XY_Logger/Train_APL_predictions",
+                           self.attributes_per_epoch['train_APL_predictions'],
+                           self.epoch_id)
 
         # report class accuracies
         for i in range(self.n_classes):
@@ -276,14 +363,13 @@ class XYLogger:
                            self.epoch_id)
 
     def __str__(self):
-        return f"Attributes per epoch: {self.attributes_per_epoch}\nTensor Attributes per epoch: {self.tensor_attributes_per_epoch}"
+        return f"Attributes per epoch: {self.attributes_per_epoch}\nTensor Attributes per epoch: {self.tensor_attributes_per_epoch}\nList Attributes per epoch: {self.list_attributes_per_epoch}"
 
     def evaluate_correctly(self, selection_threshold):
         prediction_result = self.tensor_attributes_per_epoch[
             "val_out_put_class"].argmax(dim=1)
         selection_result = None
-        if self.tensor_attributes_per_epoch[
-            "val_out_put_sel_proba"] is not None:
+        if self.tensor_attributes_per_epoch["val_out_put_sel_proba"] is not None:
             condition = self.get_correct_condition_for_selection(
                 selection_threshold)
             selection_result = torch.where(
@@ -308,8 +394,7 @@ class XYLogger:
         self.val_correct_accuracy = acc
 
     def get_correct_condition_for_selection(self, selection_threshold):
-        return self.tensor_attributes_per_epoch[
-            "val_out_put_sel_proba"] >= selection_threshold
+        return self.tensor_attributes_per_epoch["val_out_put_sel_proba"] >= selection_threshold
 
     def evaluate_incorrectly(self, selection_threshold):
         prediction_result = self.tensor_attributes_per_epoch[
@@ -507,16 +592,18 @@ class XYLogger:
         return performance_dict
 
     def result_epoch(self):
-        performance_dict = {**self.attributes_per_epoch}
+        performance_dict = {**self.attributes_per_epoch,
+                            **self.list_attributes_per_epoch}
         # Add the values to the dictionary
         performance_dict['train_accuracy'] = self.train_accuracy
         performance_dict['val_accuracy'] = self.val_accuracy
-        performance_dict['val_correct_accuracy'] = self.val_correct_accuracy
-        performance_dict['val_incorrect_accuracy'] = self.val_incorrect_accuracy
-        performance_dict['val_correct'] = self.val_correct
-        performance_dict['val_n_selected'] = self.val_n_selected
-        performance_dict['val_n_rejected'] = self.val_n_rejected
-        performance_dict['val_coverage'] = self.val_coverage
+        if self.selectivenet:
+            performance_dict['val_correct_accuracy'] = self.val_correct_accuracy
+            performance_dict['val_incorrect_accuracy'] = self.val_incorrect_accuracy
+            performance_dict['val_correct'] = self.val_correct
+            performance_dict['val_n_selected'] = self.val_n_selected
+            performance_dict['val_n_rejected'] = self.val_n_rejected
+            performance_dict['val_coverage'] = self.val_coverage
 
         performance_dict['train_accuracy_per_class'] = self.train_accuracy_per_class
         performance_dict['val_accuracy_per_class'] = self.val_accuracy_per_class

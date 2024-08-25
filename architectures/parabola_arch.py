@@ -4,18 +4,22 @@ import torch
 import numpy as np
 from torch.nn.utils import parameters_to_vector, vector_to_parameters
 
+from model.loss import BCEWithLogitsLoss
+
+
 class ParabolaArchitecture:
-    def __init__(self, config):
+    def __init__(self, config, device, hard_concepts=None, data_loader=None):
         self.model = TreeNet(config)
         self.optimizer = torch.optim.Adam(self.model.parameters(),
                                           lr=config["model"]['lr'],
                                           weight_decay=config["model"]['weight_decay'])
-        self.optimizer_sr = torch.optim.Adam(self.model.surrogate_network.parameters(),
+        self.optimizer_sr = torch.optim.Adam(self.model.sr_model.parameters(),
                                              lr=1e-3)
-        self.optimizer_mn = torch.optim.Adam(self.model.feed_forward.parameters(),
-                                             lr=1e-3)
-        self.criterion = torch.nn.MSELoss()
+        self.optimizer_mn = torch.optim.Adam(self.model.mn_model.parameters(),
+                                             lr=1e-2)
+        self.criterion_label = BCEWithLogitsLoss()
         self.criterion_sr = torch.nn.MSELoss()
+        self.lr_scheduler = None
 
 class SurrogateNetwork(nn.Module):
     def __init__(self, input_dim):
@@ -24,7 +28,6 @@ class SurrogateNetwork(nn.Module):
         self.feed_forward = nn.Sequential(
             nn.Linear(input_dim, 100),
             nn.ReLU(),
-            #nn.Dropout(0.05),
             nn.Linear(100, 25),
             nn.ReLU(),
             nn.Linear(25, 1),
@@ -40,7 +43,7 @@ class TreeNet(nn.Module):
 
         self.input_dim = config["dataset"]["num_features"]
         self.output_dim = config["dataset"]["num_classes"]
-        self.train_size = config["dataset"]["train_size"]
+        self.train_size = 200
 
         if self.output_dim == 2:
             network_out = 1
@@ -49,29 +52,23 @@ class TreeNet(nn.Module):
             network_out = self.output_dim
             surrogate_input_dim = self.train_size * self.output_dim
 
-        self.feed_forward = nn.Sequential(
+        self.mn_model = nn.Sequential(
             nn.Linear(self.input_dim, 100),
             nn.Tanh(),
             nn.Linear(100, 100),
             nn.Tanh(),
-            #nn.Dropout(0.1),
             nn.Linear(100, 10),
             nn.Tanh(),
             nn.Linear(10, network_out),
         )
 
-        self.surrogate_network = SurrogateNetwork(surrogate_input_dim)
+        self.sr_model = SurrogateNetwork(surrogate_input_dim)
         self.random_seeds = np.random.randint(1, 100, 10)
 
     def forward(self, x):
-        x = self.feed_forward(x)
-        if self.output_dim == 2:
-            x = torch.sigmoid(x)
-        else:
-            x = torch.softmax(x, 1)
-        return x
+        return self.feed_forward(x)
 
-    def compute_APL(self, X, X_test, y_test):
+    def compute_APL(self, X):
         """
         Compute average decision path length given input data. It computes the how many decision nodes one has to
         traverse on average for one data instance.
@@ -79,8 +76,6 @@ class TreeNet(nn.Module):
         Parameters
         -------
 
-        X_test
-        y_test
         X: Input features
 
         Returns
@@ -108,69 +103,15 @@ class TreeNet(nn.Module):
         self.freeze_model()
         self.eval()
         y_tree = self(X)
-        if self.args.output_dim == 2:
-            y_tree = torch.sigmoid(y_tree)
-            y_tree = np.where(y_tree > 0.5, 1, 0)
-
-            # xx, yy = np.linspace(0, 1, 100), np.linspace(
-            #     0, 1, 100)
-            # xx, yy = np.meshgrid(xx, yy)
-            # Z, data = pred_contours(xx, yy, self, device)
-        else:
-            y_tree = torch.softmax(y_tree, 1)
-            y_tree = np.argmax(y_tree, 1)
+        y_trxee = torch.where(y_tree > 0.5, 1, 0).detach().cpu().numpy()
         self.unfreeze_model()
         self.train()
 
         X_tree = X.cpu().detach().numpy()
-        # tree.fit(data, Z)
-
-        # ccp_alpha = post_pruning(X_tree, y_tree, self.min_samples_leaf)
-        tree = DecisionTreeClassifier(min_samples_leaf=self.min_samples_leaf,
-                                      ccp_alpha=0)
-        # tree = DecisionTreeClassifier(ccp_alpha=ccp_alpha)
-        # tree = DecisionTreeClassifier(min_samples_leaf=self.min_samples_leaf)
+        tree = DecisionTreeClassifier(min_samples_leaf=self.min_samples_leaf)
         tree.fit(X_tree, y_tree)
 
-        # path_length = 0
-        # for x in X_tree:
-        #     path_length += tree.decision_path([x]).toarray().sum()
-        #
-        # return path_length / len(X_tree)
-        # return weighted_node_count(tree, X_tree)
-        return node_count(tree)
-
-        # path_lengths = []
-        #
-        # for random_state in self.random_seeds:
-        #     # alphas = post_pruning(X_test, y_test)
-        #     alphas = post_pruning(X_tree, y_tree)
-        #     tree = DecisionTreeClassifier(min_samples_leaf=self.min_samples_leaf,
-        #                                   ccp_alpha=alphas,
-        #                                   random_state=random_state)
-        #     # tree.fit(data, Z)
-        #     tree.fit(X_tree, y_tree)
-        #     # average_path_length = np.mean(np.sum(tree.tree_.decision_path(np.float32(data)), axis=1))
-        #     average_path_length = np.mean(np.sum(tree.tree_.decision_path(X_tree), axis=1))
-        #     # average_path_length = weighted_node_count(tree, X_tree)
-        #     # average_path_length = weighted_node_count(tree, np.float32(data))
-        #     path_lengths.append(average_path_length)
-        #
-        #     del tree
-        #
-        # return np.mean(path_lengths)
-
-        # path_lengths = []
-        #
-        # for random_state in self.random_seeds:
-        #     tree = DecisionTreeClassifier(min_samples_leaf=self.min_samples_leaf, random_state=random_state)
-        #     tree.fit(X_tree, y_tree)
-        #     average_path_length = np.mean(np.sum(tree.tree_.decision_path(X_tree), axis=1))
-        #     path_lengths.append(average_path_length)
-        #
-        #     del tree
-        #
-        # return np.mean(path_lengths)
+        return weighted_node_count(tree, X_tree)
 
     def compute_APL_prediction(self):
         """

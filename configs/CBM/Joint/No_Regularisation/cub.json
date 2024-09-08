@@ -9,7 +9,8 @@
     "model": {
         "lr": 0.001,
         "weight_decay": 0,
-        "alpha": 1
+        "alpha": 1,
+        "train_with_all_concepts": true
     },
     "dataset": {
         "num_classes": 200,
@@ -233,10 +234,11 @@
         "verbosity": 2,
         "monitor": "off",
         "early_stop": 10,
-        "tensorboard": true
+        "tensorboard": true,
+        "save_test_tensors": true
     },
     "regularisation": {
-        "type": "L2",
+        "type": "None",
         "min_samples_leaf": 150,
         "snapshot_epochs": 50
     }

@@ -1,5 +1,5 @@
 {
-    "name": "leakage_inspection",
+    "name": "final_cbm_mnist",
     "n_gpu": 1,
 
     "arch": {
@@ -9,9 +9,8 @@
     "model": {
         "xc_lr": 0.001,
         "xc_weight_decay": 0,
-        "cy_lr": 0.001,
-        "cy_weight_decay": 0,
-        "pretrained_concept_predictor":
+        "cy_lr": 0.01,
+        "cy_weight_decay": 0
     },
     "dataset": {
         "num_classes": 3,
@@ -20,31 +19,33 @@
                          "width_small", "width_medium", "width_large", "width_xlarge",
                          "length_small", "length_medium", "length_large", "length_xlarge"],
         "class_names": ["6", "8", "9"],
-        "contour_plot": false
+        "contour_plot": false,
+        "use_attribute_imbalance": false
     },
     "data_loader": {
-        "type": "get_mnist_dataLoader",
+        "type": "get_mnist_dataLoader_original",
         "args":{
             "data_dir": "./datasets/MNIST",
             "type": "SGD",
-            "batch_size": 206
+            "batch_size": 8859
         }
     },
     "trainer": {
-        "type": "LeakageInspectionTrainer",
-        "hard_cbm": true,
+        "type": "SequentialCBMTrainer",
+        "hard_cbm": false,
         "args": {},
-        "xc_epochs": 30,
-        "cy_epochs": 100,
+        "xc_epochs": 100,
+        "cy_epochs": 200,
         "save_dir": "saved/",
         "save_period": 1000,
         "verbosity": 2,
         "monitor": "off",
-        "early_stop": 10,
-        "tensorboard": true
+        "early_stop": 0,
+        "tensorboard": true,
+        "save_test_tensors": false
     },
     "regularisation": {
-        "type": "L2",
+        "type": "None",
         "min_samples_leaf": 150,
         "snapshot_epochs": 50
     }

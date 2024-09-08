@@ -3,7 +3,7 @@ import collections
 import torch
 import numpy as np
 from trainers.leakage_inspection_general_case import perform_leakage_visualization
-from utils.parse_config import ConfigParser
+from utils.parse_config import ConfigParser, _update_config
 from utils import prepare_device
 import importlib
 

@@ -38,7 +38,7 @@ class JointCBMTrainer:
         self.epoch_trainer._training_loop(self.epochs)
         self.plot()
 
-    def test(self, test_data_loader):
+    def test(self, test_data_loader, hard_cbm=False):
         self.epoch_trainer._test(test_data_loader)
 
     def plot(self):
@@ -53,9 +53,6 @@ class JointCBMTrainer:
         val_accuracies = results_trainer['val_accuracy']
         APLs_train = results_trainer['train_APL']
         APLs_test = results_trainer['val_APL']
-        if self.reg == 'Tree':
-            APL_predictions_train = results_trainer['train_APL_predictions']
-            APL_predictions_test = results_trainer['val_APL_predictions']
         fidelities_train = results_trainer['train_fidelity']
         fidelities_test = results_trainer['val_fidelity']
         FI_train = results_trainer['train_feature_importance']
@@ -129,11 +126,6 @@ class JointCBMTrainer:
         plt.subplot(5, 2, 7)
         plt.plot(epochs, APLs_train, 'b', label='Train')
         plt.plot(epochs, APLs_test, 'r', label='Test')
-        if self.reg == 'Tree':
-            plt.plot(epochs, APL_predictions_train, 'g',
-                     label='Train Predictions')
-            plt.plot(epochs, APL_predictions_test, 'y',
-                     label='Test Predictions')
         plt.title('APL')
         plt.xlabel('Epochs')
         plt.ylabel('APL')

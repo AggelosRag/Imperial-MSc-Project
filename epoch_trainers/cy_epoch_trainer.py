@@ -37,7 +37,7 @@ class CY_Epoch_Trainer(EpochTrainerBase):
         self.criterion = arch.criterion_label
         self.min_samples_leaf = config['regularisation']['min_samples_leaf']
         self.epochs = config['trainer']['cy_epochs']
-
+        self.expert = expert
         self.do_validation = self.val_loader is not None
 
         # check if selective net is used
@@ -129,15 +129,6 @@ class CY_Epoch_Trainer(EpochTrainerBase):
                         batch_size=len(self.train_loader.dataset),
                         mode='train')
 
-                    # if (epoch == self.epochs - 1):
-                    #     # visualize last tree
-                    #     self._visualize_tree(tree, self.config, epoch, APL, 'None',
-                    #                          'None', mode='train')
-
-                    # visualize last tree
-                    # self._visualize_tree(tree, self.config, epoch, APL, 'None',
-                    #                      'None', mode='train')
-
                 loss = loss_label["target_loss"]
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -150,6 +141,17 @@ class CY_Epoch_Trainer(EpochTrainerBase):
                 t.set_postfix(
                     batch_id='{0}'.format(batch_idx + 1))
                 t.update()
+
+        # visualize last tree
+        if epoch == (self.epochs - 1):
+            self._visualize_tree(tree=tree,
+                                 config=self.config,
+                                 epoch=epoch,
+                                 APL=APL,
+                                 train_acc='None',
+                                 val_acc='None',
+                                 mode='train',
+                                 expert=self.expert)
 
         if self.do_validation:
             self._valid_epoch(epoch)
@@ -199,17 +201,17 @@ class CY_Epoch_Trainer(EpochTrainerBase):
                     if self.selective_net:
                         self.metrics_tracker.update_batch(
                             update_dict_or_key='out_put_sel_proba',
-                            value=out_selector.detach().cpu(),
+                            value=out_selector,
                             batch_size=batch_size,
                             mode='val')
                         self.metrics_tracker.update_batch(
                             update_dict_or_key='out_put_class',
-                            value=y_pred.detach().cpu(),
+                            value=y_pred,
                             batch_size=batch_size,
                             mode='val')
                         self.metrics_tracker.update_batch(
                             update_dict_or_key='out_put_target',
-                            value=y_batch.detach().cpu(),
+                            value=y_batch,
                             batch_size=batch_size,
                             mode='val')
 
@@ -326,13 +328,13 @@ class CY_Epoch_Trainer(EpochTrainerBase):
                         #     # visualize last tree
                         #     self._visualize_tree(tree, self.config, epoch, APL,
                         #                          'None', 'None', mode='val',
-                        #                          iteration=str(self.iteration) + '_joint')
+                        #                          expert=str(self.expert) + '_joint')
 
                         # if (epoch == self.epochs - 1) and self.selective_net == False:
                         #     self._build_tree_with_fixed_roots(
                         #         self.min_samples_leaf, C_pred, y_pred,
                         #         self.gt_val_tree, 'val', None,
-                        #         iteration=str(self.iteration) + '_joint'
+                        #         expert=str(self.expert) + '_joint'
                         #     )
 
                     loss = loss_label["target_loss"]
@@ -370,7 +372,7 @@ class CY_Epoch_Trainer(EpochTrainerBase):
         self.logger.info(f"Feature Importance: {test_metrics['feature_importance']}")
 
 
-    def _save_selected_results(self, loader, iteration, mode, arch, min_samples_leaf_for_gt):
+    def _save_selected_results(self, loader, expert, mode, arch, min_samples_leaf_for_gt=None):
         print(f"\n------------------- Metrics ({mode}) ---------------------")
         print('Loading the best model and applying selectivenet ...')
         tensor_X_rej = torch.FloatTensor().to(self.device)
@@ -404,7 +406,7 @@ class CY_Epoch_Trainer(EpochTrainerBase):
                         g_y = y_batch[arr_rej_indices]
                         g_ypred = y_pred[arr_rej_indices, :]
 
-                        tensor_X_rej = torch.cat((tensor_X_rej, g_X.cpu()), dim=0)
+                        tensor_X_rej = torch.cat((tensor_X_rej, g_X), dim=0)
                         tensor_C_rej = torch.cat((tensor_C_rej, g_concepts), dim=0)
                         tensor_y_rej = torch.cat((tensor_y_rej, g_y), dim=0)
                         tensor_y_pred_rej = torch.cat((tensor_y_pred_rej, g_ypred), dim=0)
@@ -415,7 +417,7 @@ class CY_Epoch_Trainer(EpochTrainerBase):
                         g_ypred = y_pred[arr_sel_indices, :]
                         g_concepts = C_batch[arr_sel_indices, :]
 
-                        tensor_X_acc = torch.cat((tensor_X_acc, g_X.cpu()), dim=0)
+                        tensor_X_acc = torch.cat((tensor_X_acc, g_X), dim=0)
                         tensor_y_acc = torch.cat((tensor_y_acc, g_y), dim=0)
                         tensor_C_acc = torch.cat((tensor_C_acc, g_concepts), dim=0)
                         tensor_y_pred_acc = torch.cat((tensor_y_pred_acc, g_ypred), dim=0)
@@ -452,64 +454,64 @@ class CY_Epoch_Trainer(EpochTrainerBase):
         #             f'Concept {j}: {torch.sum((class_digit[:, j] == 1).int())}')
 
         # Fit a tree
-        APL, fid, fi, tree = self._calculate_APL(self.min_samples_leaf,
-                                                 tensor_C_acc,
-                                                 tensor_y_pred_acc)
-
-        self._visualize_tree(tree, self.config, None, APL, 'None', 'None',
-                             mode=f'selected_{mode}_fid_{fid:.2f}_samples', iteration=iteration)
-
-        tensor_C_all = torch.cat((tensor_C_acc, tensor_C_rej), dim=0)
-        tensor_y_pred_all = torch.cat((tensor_y_pred_acc, tensor_y_pred_rej), dim=0)
-        tensor_y_all = torch.cat((tensor_y_acc, tensor_y_rej), dim=0)
-        # isolate the indices of all ys = 1
-        tensor_C_all_8s = tensor_C_all[tensor_y_all == 1].numpy()
-        tensor_C_all_9s = tensor_C_all[tensor_y_all == 2].numpy()
-        tensor_C_all_6s = tensor_C_all[tensor_y_all == 0].numpy()
-
-        APL_all, fid_all, fi_all, tree_all = self._calculate_APL(self.min_samples_leaf,
-                                                 tensor_C_all,
-                                                 tensor_y_pred_all)
-
-        self._visualize_tree(tree_all, self.config, None, APL_all, 'None', 'None',
-                             mode=f'all_{mode}_fid_{fid_all:.2f}_samples', iteration=iteration)
-
-        APL_all_true, fid_all_true, fi_all_true, tree_all_true = self._calculate_APL_gt(300,
-                                                                                     tensor_C_all,
-                                                                                     tensor_y_all)
-
-        self._visualize_tree(tree_all_true, self.config, None, APL_all_true, 'None', 'None',
-                             mode=f'all_true_{mode}_fid_{fid_all_true:.2f}_samples', iteration=iteration)
-
-        # Fit a tree
-        APL_truth, fid_truth, fi_truth, tree_truth = self._calculate_APL_gt(min_samples_leaf_for_gt,
-                                                                            tensor_C_acc,
-                                                                            tensor_y_acc)
-
-        self._visualize_tree(tree_truth, self.config, None, APL_truth, 'None', 'None',
-                             mode=f'selected_{mode}_fid_{fid_truth:.2f}_truth', iteration=iteration)
-
-        APL_selector, fid_selector, fi_selector, tree_selector = self._calculate_APL(1,
-                                                                 tensor_C_all,
-                                                                 tensor_out_selector)
-
-        # export tree
-        plt.figure(figsize=(20, 20))
-        dot_data = export_graphviz(
-            decision_tree=tree_selector,
-            out_file=None,
-            filled=True,
-            rounded=True,
-            special_characters=True,
-            feature_names=self.config['dataset']['concept_names'],
-            class_names=["rejected", "accepted"],
-        )
-        name = f'selected_{mode}_fid_{fid_selector:.2f}_selector_expert_{iteration}_nodes_{APL_selector}'
-
-        # Render the graph
-        fig_path = str(self.config.log_dir) + '/trees'
-        graph = graphviz.Source(dot_data, directory=fig_path)
-        graph.render(name, format="png", cleanup=True)
+        # APL, fid, fi, tree = self._calculate_APL(self.min_samples_leaf,
+        #                                          tensor_C_acc,
+        #                                          tensor_y_pred_acc)
+        #
+        # self._visualize_tree(tree, self.config, None, APL, 'None', 'None',
+        #                      mode=f'selected_{mode}_fid_{fid:.2f}_samples', expert=expert)
+        #
+        # tensor_C_all = torch.cat((tensor_C_acc, tensor_C_rej), dim=0)
+        # tensor_y_pred_all = torch.cat((tensor_y_pred_acc, tensor_y_pred_rej), dim=0)
+        # tensor_y_all = torch.cat((tensor_y_acc, tensor_y_rej), dim=0)
+        # # isolate the indices of all ys = 1
+        # tensor_C_all_8s = tensor_C_all[tensor_y_all == 1].numpy()
+        # tensor_C_all_9s = tensor_C_all[tensor_y_all == 2].numpy()
+        # tensor_C_all_6s = tensor_C_all[tensor_y_all == 0].numpy()
+        #
+        # APL_all, fid_all, fi_all, tree_all = self._calculate_APL(self.min_samples_leaf,
+        #                                          tensor_C_all,
+        #                                          tensor_y_pred_all)
+        #
+        # self._visualize_tree(tree_all, self.config, None, APL_all, 'None', 'None',
+        #                      mode=f'all_{mode}_fid_{fid_all:.2f}_samples', expert=expert)
+        #
+        # APL_all_true, fid_all_true, fi_all_true, tree_all_true = self._calculate_APL_gt(300,
+        #                                                                              tensor_C_all,
+        #                                                                              tensor_y_all)
+        #
+        # self._visualize_tree(tree_all_true, self.config, None, APL_all_true, 'None', 'None',
+        #                      mode=f'all_true_{mode}_fid_{fid_all_true:.2f}_samples', expert=expert)
+        #
+        # # Fit a tree
+        # APL_truth, fid_truth, fi_truth, tree_truth = self._calculate_APL_gt(min_samples_leaf_for_gt,
+        #                                                                     tensor_C_acc,
+        #                                                                     tensor_y_acc)
+        #
+        # self._visualize_tree(tree_truth, self.config, None, APL_truth, 'None', 'None',
+        #                      mode=f'selected_{mode}_fid_{fid_truth:.2f}_truth', expert=expert)
+        #
+        # APL_selector, fid_selector, fi_selector, tree_selector = self._calculate_APL(1,
+        #                                                          tensor_C_all,
+        #                                                          tensor_out_selector)
+        #
+        # # export tree
+        # plt.figure(figsize=(20, 20))
+        # dot_data = export_graphviz(
+        #     decision_tree=tree_selector,
+        #     out_file=None,
+        #     filled=True,
+        #     rounded=True,
+        #     special_characters=True,
+        #     feature_names=self.config['dataset']['concept_names'],
+        #     class_names=["rejected", "accepted"],
+        # )
+        # name = f'selected_{mode}_fid_{fid_selector:.2f}_selector_expert_{expert}_nodes_{APL_selector}'
+        #
+        # # Render the graph
+        # fig_path = str(self.config.log_dir) + '/trees'
+        # graph = graphviz.Source(dot_data, directory=fig_path)
+        # graph.render(name, format="png", cleanup=True)
 
 
         # print(f"APL: {APL}")
@@ -525,31 +527,96 @@ class CY_Epoch_Trainer(EpochTrainerBase):
         # print(f"tensor_y_acc size: {tensor_y_acc.size()}")
         # print(f"tensor_y_pred_acc size: {tensor_y_pred_acc.size()}")
 
-        print(f"Expert: {iteration}")
+        print(f"Expert: {expert}")
         print(f"Number of accepted {mode} samples: {tensor_X_acc.size(0)}")
         print(f"Number of rejected {mode} samples: {tensor_X_rej.size(0)}")
-        proba = torch.nn.Softmax(dim=1)(tensor_y_pred_rej)[:, 1]
-        val_auroc, val_aurpc = compute_AUC(tensor_y_rej, pred=proba)
-        acc_rej = accuracy_score(tensor_y_rej.cpu().numpy(),
-                                tensor_y_pred_rej.cpu().argmax(dim=1).numpy())
-        print(f"{mode} accuracy of the rejected samples: {acc_rej * 100} (%)")
-        print(f"{mode} AUROC of the rejected samples: {val_auroc} (0-1)")
-
-        proba = torch.nn.Softmax(dim=1)(tensor_y_pred_acc)[:, 1]
-        val_auroc, val_aurpc = compute_AUC(tensor_y_acc, pred=proba)
-        acc_acc = accuracy_score(tensor_y_acc.cpu().numpy(),
-                                tensor_y_pred_acc.cpu().argmax(dim=1).numpy())
-        print(f"{mode} Accuracy of the accepted samples: {acc_acc * 100} (%)")
-        print(f"{mode} AUROC of the accepted samples: {val_auroc} (0-1)")
+        # #proba = torch.nn.Softmax(dim=1)(tensor_y_pred_rej)[:, 1]
+        # acc_rej = accuracy_score(tensor_y_rej.cpu().numpy(),
+        #                         tensor_y_pred_rej.cpu().argmax(dim=1).numpy())
+        # print(f"{mode} accuracy of the rejected samples: {acc_rej * 100} (%)")
+        #
+        # #proba = torch.nn.Softmax(dim=1)(tensor_y_pred_acc)[:, 1]
+        # acc_acc = accuracy_score(tensor_y_acc.cpu().numpy(),
+        #                         tensor_y_pred_acc.cpu().argmax(dim=1).numpy())
+        # print(f"{mode} Accuracy of the accepted samples: {acc_acc * 100} (%)")
 
         # output_path = os.path.join(self.config.save_dir, "intermediate_tensors")
         # if not os.path.exists(output_path):
         #     os.makedirs(output_path)
 
-        # torch.save(tensor_X_rej, os.path.join(output_path, f"iteration_{iteration}_{mode}_tensor_X_rej.pt"))
-        # torch.save(tensor_C_rej, os.path.join(output_path, f"iteration_{iteration}_{mode}_tensor_C_rej.pt"))
-        # torch.save(tensor_y_rej, os.path.join(output_path, f"iteration_{iteration}_{mode}_tensor_y.pt"))
+        # torch.save(tensor_X_rej, os.path.join(output_path, f"expert_{expert}_{mode}_tensor_X_rej.pt"))
+        # torch.save(tensor_C_rej, os.path.join(output_path, f"expert_{expert}_{mode}_tensor_C_rej.pt"))
+        # torch.save(tensor_y_rej, os.path.join(output_path, f"expert_{expert}_{mode}_tensor_y.pt"))
 
         # return (tensor_X_rej, tensor_C_rej, tensor_y_rej, fi)
-        return (tensor_X_acc, tensor_C_acc, tensor_y_acc, fi_truth, tree_truth,
+
+
+        # return (tensor_X_acc, tensor_C_acc, tensor_y_acc, fi_truth, tree_truth,
+        #         tensor_X_rej, tensor_C_rej, tensor_y_rej)
+        return (tensor_X_acc, tensor_C_acc, tensor_y_acc, None, None,
+                tensor_X_rej, tensor_C_rej, tensor_y_rej)
+
+    def _get_predictions_from_selector(self, loader, expert_idx, mode, expert):
+        print(f'\nGet test samples selected by expert {expert_idx} ...')
+        tensor_X_rej = torch.FloatTensor().to(self.device)
+        tensor_X_acc = torch.FloatTensor().to(self.device)
+        tensor_C_rej = torch.FloatTensor().to(self.device)
+        tensor_C_acc = torch.FloatTensor().to(self.device)
+        tensor_y_acc = torch.LongTensor().to(self.device)
+        tensor_y_rej = torch.LongTensor().to(self.device)
+        tensor_out_selector = torch.FloatTensor().to(self.device)
+
+        with torch.no_grad():
+            with tqdm(total=len(loader), file=sys.stdout) as t:
+                for batch_id, (X_batch, C_batch, y_batch) in enumerate(loader):
+                    X_batch = X_batch.to(self.device)
+                    C_batch = C_batch.to(self.device)
+                    y_batch = y_batch.to(self.device)
+
+                    # Forward pass
+                    C_pred = expert.model.concept_predictor(X_batch)
+                    C_pred = torch.sigmoid(C_pred)
+                    C_pred = C_pred[:, expert.arch.selected_concepts]
+
+                    out_selector = expert.arch.selector(C_pred)
+                    tensor_out_selector = torch.cat((tensor_out_selector, out_selector), dim=0)
+
+                    selection_threshold = self.config['selectivenet']['selection_threshold']
+                    arr_rej_indices = torch.nonzero(out_selector < selection_threshold, as_tuple=True)[0]
+                    arr_sel_indices = torch.nonzero(out_selector >= selection_threshold, as_tuple=True)[0]
+
+                    if arr_rej_indices.size(0) > 0:
+                        g_X = X_batch[arr_rej_indices, :, :, :]
+                        g_concepts = C_batch[arr_rej_indices, :]
+                        g_y = y_batch[arr_rej_indices]
+
+                        tensor_X_rej = torch.cat((tensor_X_rej, g_X), dim=0)
+                        tensor_C_rej = torch.cat((tensor_C_rej, g_concepts), dim=0)
+                        tensor_y_rej = torch.cat((tensor_y_rej, g_y), dim=0)
+
+                    if arr_sel_indices.size(0) > 0:
+                        g_X = X_batch[arr_sel_indices, :, :, :]
+                        g_y = y_batch[arr_sel_indices]
+                        g_concepts = C_batch[arr_sel_indices, :]
+
+                        tensor_X_acc = torch.cat((tensor_X_acc, g_X), dim=0)
+                        tensor_y_acc = torch.cat((tensor_y_acc, g_y), dim=0)
+                        tensor_C_acc = torch.cat((tensor_C_acc, g_concepts), dim=0)
+
+                    t.set_postfix(
+                        batch_id='{0}'.format(batch_id + 1))
+                    t.update()
+
+        tensor_X_rej = tensor_X_rej.cpu()
+        tensor_X_acc = tensor_X_acc.cpu()
+        tensor_C_rej = tensor_C_rej.cpu()
+        tensor_C_acc = tensor_C_acc.cpu()
+        tensor_y_rej = tensor_y_rej.cpu()
+        tensor_y_acc = tensor_y_acc.cpu()
+
+        print(f"Expert: {expert_idx}")
+        print(f"Number of accepted {mode} samples: {tensor_X_acc.size(0)}")
+        print(f"Number of rejected {mode} samples: {tensor_X_rej.size(0)}")
+
+        return (tensor_X_acc, tensor_C_acc, tensor_y_acc, None, None,
                 tensor_X_rej, tensor_C_rej, tensor_y_rej)

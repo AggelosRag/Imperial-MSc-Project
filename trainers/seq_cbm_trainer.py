@@ -5,6 +5,8 @@ import graphviz
 import numpy as np
 import os
 
+from torch import nn
+
 from epoch_trainers.xc_epoch_trainer import XC_Epoch_Trainer
 from epoch_trainers.cy_epoch_trainer import CY_Epoch_Trainer
 from epoch_trainers.cy_epoch_tree_trainer import CY_Epoch_Tree_Trainer
@@ -27,6 +29,7 @@ class SequentialCBMTrainer:
         self.cy_epochs = config['trainer']['cy_epochs']
         self.num_concepts = config['dataset']['num_concepts']
         self.concept_names = config['dataset']['concept_names']
+        self.class_names = config['dataset']['class_names']
         self.reg = reg
 
         # define the x->c model
@@ -36,13 +39,21 @@ class SequentialCBMTrainer:
             self.valid_data_loader)
 
         # check if the label predictor is a tree or not
-        if self.arch.model.label_predictor.__class__.__name__ in ['DecisionTreeClassifier', 'CustomDecisionTree']:
-            self.tree_label_predictor = True
+        if self.arch.model.label_predictor.__class__.__name__ in [
+            'DecisionTreeClassifier', 'CustomDecisionTree', 'SGDClassifier']:
+            self.sklearn_label_predictor = True
+            if self.arch.model.label_predictor.__class__.__name__ in [
+            'DecisionTreeClassifier', 'CustomDecisionTree']:
+                self.tree_label_predictor = True
+            else:
+                self.tree_label_predictor = False
+        else:
+            self.sklearn_label_predictor = False
 
     def train(self):
 
         logger = self.config.get_logger('train')
-        if self.expert == 1 or "pretrained_concept_predictor" not in self.config["model"]:
+        if self.expert == 1 and "pretrained_concept_predictor" not in self.config["model"]:
             # train the x->c model
             print("\nTraining x->c")
             logger.info("Training x->c")
@@ -56,7 +67,7 @@ class SequentialCBMTrainer:
         # train the c->y model
         print("\nTraining c->y")
         logger.info("Training c->y")
-        if self.tree_label_predictor:
+        if self.sklearn_label_predictor:
             train_C_pred = train_C_pred.detach().cpu().numpy()
             train_y = train_y.detach().cpu().numpy()
             val_C_pred = val_C_pred.detach().cpu().numpy()
@@ -71,8 +82,11 @@ class SequentialCBMTrainer:
             print(f'Training Accuracy: {accuracy_score(train_y, y_pred)}')
             y_pred = self.arch.label_predictor.predict(val_C_pred)
             print(f'Validation Accuracy: {accuracy_score(val_y, y_pred)}')
-            self._visualize_DT_label_predictor(self.arch.label_predictor,
-                                               X=train_C_pred, path='')
+            if self.tree_label_predictor:
+                self._visualize_DT_label_predictor(self.arch.label_predictor,
+                                                   X=train_C_pred, path='')
+            else:
+                print(self.analyze_classifier(self.arch.label_predictor))
         else:
             # create a new dataloader for the c->y model
             train_data_loader = torch.utils.data.DataLoader(
@@ -104,7 +118,7 @@ class SequentialCBMTrainer:
         tensor_C_pred, tensor_y = self.xc_epoch_trainer._test(test_data_loader, hard_cbm)
 
         # evaluate c->y
-        if self.tree_label_predictor:
+        if self.sklearn_label_predictor:
             tensor_C_pred = tensor_C_pred.detach().cpu().numpy()
             tensor_y = tensor_y.detach().cpu().numpy()
             y_pred = self.arch.label_predictor.predict(tensor_C_pred)
@@ -308,3 +322,43 @@ class SequentialCBMTrainer:
                                            class_names = self.config['dataset']['class_names'],
                                            output_dir = fig_path + '/decision_paths',
                                            leaf_id = leaf)
+
+
+    def analyze_classifier(self, sklearn_classifier, k=10, print_lows=False):
+
+        classifier = nn.Linear(
+            self.config["dataset"]["num_concepts"], self.config["dataset"]["num_classes"]
+        )
+        classifier.weight.data = torch.tensor(sklearn_classifier.coef_)
+        classifier.bias.data = torch.tensor(sklearn_classifier.intercept_)
+
+        weights = classifier.weight.clone().detach()
+        output = []
+
+        if len(self.class_names) == 2:
+            weights = [weights.squeeze(), weights.squeeze()]
+
+        for idx in range(self.config["dataset"]["num_classes"]):
+            cls_weights = weights[idx]
+            topk_vals, topk_indices = torch.topk(cls_weights, k=k)
+            topk_indices = topk_indices.detach().cpu().numpy()
+            topk_concepts = [self.concept_names[j] for j in topk_indices]
+            analysis_str = [f"Class : {self.class_names[idx]}"]
+            for j, c in enumerate(topk_concepts):
+                analysis_str.append(f"\t {j + 1} - {c}: {topk_vals[j]:.3f}")
+            analysis_str = "\n".join(analysis_str)
+            output.append(analysis_str)
+
+            if print_lows:
+                topk_vals, topk_indices = torch.topk(-cls_weights, k=k)
+                topk_indices = topk_indices.detach().cpu().numpy()
+                topk_concepts = [self.concept_names[j] for j in topk_indices]
+                analysis_str = [f"Class : {self.class_names[idx]}"]
+                for j, c in enumerate(topk_concepts):
+                    analysis_str.append(
+                        f"\t {j + 1} - {c}: {-topk_vals[j]:.3f}")
+                analysis_str = "\n".join(analysis_str)
+                output.append(analysis_str)
+
+        analysis = "\n".join(output)
+        return analysis

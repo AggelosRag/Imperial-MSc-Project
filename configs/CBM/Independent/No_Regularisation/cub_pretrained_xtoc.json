@@ -232,7 +232,7 @@
         "hard_cbm": true,
         "args": {},
         "xc_epochs": 300,
-        "cy_epochs": 9,
+        "cy_epochs": 50,
         "save_dir": "saved/",
         "save_period": 20,
         "verbosity": 2,
@@ -242,7 +242,7 @@
         "save_test_tensors": false
     },
     "regularisation": {
-        "type": "L2",
+        "type": "None",
         "min_samples_leaf": 1,
         "snapshot_epochs": 50
     }

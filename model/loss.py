@@ -43,7 +43,7 @@ class SelectiveNetLoss(torch.nn.Module):
             lm: Lagrange multiplier for coverage constraint. original experiment's value is 32.
         """
         super(SelectiveNetLoss, self).__init__()
-        assert 0.0 < coverage <= 1.0
+        #assert 0.0 < coverage <= 1.0
 
         self.CE = CE
         self.coverage = coverage
@@ -55,8 +55,7 @@ class SelectiveNetLoss(torch.nn.Module):
         self.lm = lm
         self.alpha = alpha
 
-    def forward(
-            self, outputs, target, prev_selection_outs=None):
+    def forward(self, outputs, target, prev_selection_outs=None):
 
         prediction_out = outputs["prediction_out"]
         selection_out = outputs["selection_out"]

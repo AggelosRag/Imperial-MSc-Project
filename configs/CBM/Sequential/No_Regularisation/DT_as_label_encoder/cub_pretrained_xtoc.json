@@ -1,5 +1,5 @@
 {
-    "name": "cbm_cub_sequential_dt",
+    "name": "cbm_cub_independent_dt",
     "n_gpu": 1,
 
     "arch": {
@@ -229,7 +229,7 @@
     },
     "trainer": {
         "type": "SequentialCBMTrainer",
-        "hard_cbm": false,
+        "hard_cbm": true,
         "args": {},
         "xc_epochs": 300,
         "cy_epochs": 9,
@@ -242,7 +242,7 @@
         "save_test_tensors": false
     },
     "regularisation": {
-        "type": "L2",
+        "type": "None",
         "min_samples_leaf": 1,
         "snapshot_epochs": 50
     }

@@ -41,7 +41,7 @@
         "tensorboard": true
     },
     "regularisation": {
-        "type": "L2",
+        "type": "None",
         "min_samples_leaf": 150,
         "snapshot_epochs": 50
     },

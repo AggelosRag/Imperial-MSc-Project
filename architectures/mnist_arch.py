@@ -1,3 +1,4 @@
+from sklearn.linear_model import SGDClassifier
 from torch import nn
 import torch
 
@@ -20,6 +21,58 @@ class MNISTBlackBoxArchitecture:
         self.optimizer = torch.optim.Adam(params_to_update,
                                           lr=config["model"]['lr'])
         self.lr_scheduler = None
+        self.selected_concepts = [i for i in range(config["dataset"]["num_concepts"])]
+
+class MNISTCBMwithSLRaslabelPredictorArchitecture:
+    def __init__(self, config, device, hard_concepts=None, data_loader=None):
+
+        if hard_concepts is None:
+            self.hard_concepts = []
+        else:
+            self.hard_concepts = hard_concepts
+
+        C_train = data_loader.dataset[:][1]
+        if "use_attribute_imbalance" in config["dataset"]:
+            if config["dataset"]["use_attribute_imbalance"]:
+                self.imbalance = torch.FloatTensor(find_class_imbalance_mnist(C_train)).to(device)
+            else:
+                self.imbalance = None
+        else:
+            self.imbalance = None
+
+        self.concept_predictor = ConceptPredictor(config["dataset"]["num_concepts"])
+        self.label_predictor = SGDClassifier(random_state=42, loss="log_loss",
+                                             alpha=1e-3, l1_ratio=0.99,
+                                             verbose=0,
+                                             penalty="elasticnet", max_iter=10000)
+        self.model = MainNetwork(self.concept_predictor, self.label_predictor)
+
+        if "pretrained_concept_predictor" in config["model"]:
+            state_dict = torch.load(config["model"]["pretrained_concept_predictor"])["state_dict"]
+            # Create a new state dictionary for the concept predictor layers
+            concept_predictor_state_dict = {}
+
+            # Iterate through the original state dictionary and isolate concept predictor layers
+            for key, value in state_dict.items():
+                if key.startswith('concept_predictor'):
+                    # Remove the prefix "concept_predictor."
+                    new_key = key.replace('concept_predictor.', '')
+                    concept_predictor_state_dict[new_key] = value
+
+            self.model.concept_predictor.load_state_dict(concept_predictor_state_dict)
+            print("Loaded pretrained concept predictor from ", config["model"]["pretrained_concept_predictor"])
+
+        # Define loss functions and optimizers
+        self.criterion_concept = torch.nn.BCELoss(weight=self.imbalance)
+        self.criterion_per_concept = nn.BCELoss(reduction='none')
+
+        xc_params_to_update = [
+            {'params': self.model.concept_predictor.parameters(), 'weight_decay': config["model"]['xc_weight_decay']},
+        ]
+        self.xc_optimizer = torch.optim.Adam(xc_params_to_update, lr=config["model"]['xc_lr'])
+        self.cy_optimizer = None
+        self.lr_scheduler = None
+        self.selected_concepts = [i for i in range(config["dataset"]["num_concepts"])]
 
 class MNISTCBMwithDTaslabelPredictorArchitecture:
     def __init__(self, config, device, hard_concepts=None, data_loader=None):
@@ -59,6 +112,24 @@ class MNISTCBMwithDTaslabelPredictorArchitecture:
             self.model.concept_predictor.load_state_dict(concept_predictor_state_dict)
             print("Loaded pretrained concept predictor from ", config["model"]["pretrained_concept_predictor"])
 
+        if "pretrained_concept_predictor_joint" in config["model"]:
+            self.concept_predictor_joint = ConceptPredictor(config["dataset"]["num_concepts"])
+            state_dict = torch.load(config["model"]["pretrained_concept_predictor_joint"])["state_dict"]
+            # Create a new state dictionary for the concept predictor layers
+            concept_predictor_state_dict = {}
+
+            # Iterate through the original state dictionary and isolate concept predictor layers
+            for key, value in state_dict.items():
+                if key.startswith('concept_predictor'):
+                    # Remove the prefix "concept_predictor."
+                    new_key = key.replace('concept_predictor.', '')
+                    concept_predictor_state_dict[new_key] = value
+
+            self.concept_predictor_joint.load_state_dict(concept_predictor_state_dict)
+            print("Loaded pretrained concept predictor (joint training) from ", config["model"]["pretrained_concept_predictor_joint"])
+        else:
+            self.concept_predictor_joint = None
+
         # Define loss functions and optimizers
         self.criterion_concept = torch.nn.BCELoss(weight=self.imbalance)
         self.criterion_per_concept = nn.BCELoss(reduction='none')
@@ -69,6 +140,7 @@ class MNISTCBMwithDTaslabelPredictorArchitecture:
         self.xc_optimizer = torch.optim.Adam(xc_params_to_update, lr=config["model"]['xc_lr'])
         self.cy_optimizer = None
         self.lr_scheduler = None
+        self.selected_concepts = [i for i in range(config["dataset"]["num_concepts"])]
 
 class MNISTCBMTreeArchitecture:
     def __init__(self, config, device, hard_concepts=None, data_loader=None):
@@ -109,6 +181,7 @@ class MNISTCBMTreeArchitecture:
         self.optimizer_sr = torch.optim.Adam(self.sr_model.parameters(), lr=0.001)
         self.optimizer_mn = torch.optim.Adam(self.mn_model.parameters(), lr=0.001)
         self.lr_scheduler = None
+        self.selected_concepts = [i for i in range(config["dataset"]["num_concepts"])]
 
 class MNISTCBMArchitecture:
     def __init__(self, config, device, hard_concepts=None, data_loader=None):
@@ -175,6 +248,7 @@ class MNISTCBMArchitecture:
                                               lr=config["model"]['lr'])
 
         self.lr_scheduler = None
+        self.selected_concepts = [i for i in range(config["dataset"]["num_concepts"])]
 
 class MNISTCBMSelectiveNetArchitecture:
     def __init__(self, config, device, hard_concepts=None, data_loader=None):
@@ -198,6 +272,21 @@ class MNISTCBMSelectiveNetArchitecture:
         self.label_predictor = LabelPredictor(concept_size=config["dataset"]["num_concepts"],
                                               num_classes=config["dataset"]["num_classes"])
         self.model = MainNetwork(self.concept_predictor, self.label_predictor)
+
+        if "pretrained_concept_predictor" in config["model"]:
+            state_dict = torch.load(config["model"]["pretrained_concept_predictor"])["state_dict"]
+            # Create a new state dictionary for the concept predictor layers
+            concept_predictor_state_dict = {}
+
+            # Iterate through the original state dictionary and isolate concept predictor layers
+            for key, value in state_dict.items():
+                if key.startswith('concept_predictor'):
+                    # Remove the prefix "concept_predictor."
+                    new_key = key.replace('concept_predictor.', '')
+                    concept_predictor_state_dict[new_key] = value
+
+            self.model.concept_predictor.load_state_dict(concept_predictor_state_dict)
+            print("Loaded pretrained concept predictor from ", config["model"]["pretrained_concept_predictor"])
 
         # define the selector network
         self.selector = torch.nn.Sequential(
@@ -244,6 +333,9 @@ class MNISTCBMSelectiveNetArchitecture:
             ]
             self.optimizer = torch.optim.Adam(params_to_update,
                                               lr=config["model"]['lr'])
+
+        self.selected_concepts = [i for i in range(config["dataset"]["num_concepts"])]
+        self.lr_scheduler = None
 
 class MNISTCYArchitecture:
     def __init__(self, config):

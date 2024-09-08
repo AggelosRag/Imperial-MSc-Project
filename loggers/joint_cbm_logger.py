@@ -38,9 +38,9 @@ class JointCBMLogger:
         else:
             y_all_train = []
             y_all_val = []
-            for i in train_loader.data:
+            for i in train_loader.dataset.data:
                 y_all_train.append(i['class_label'])
-            for i in val_loader.data:
+            for i in val_loader.dataset.data:
                 y_all_val.append(i['class_label'])
             y_all_train = torch.tensor(y_all_train)
             y_all_val = torch.tensor(y_all_val)

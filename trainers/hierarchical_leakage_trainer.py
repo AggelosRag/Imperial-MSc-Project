@@ -29,18 +29,12 @@ class HierarchicalLeakageTrainer:
         (tensor_X_train, tensor_C_train, tensor_y_acc_train, fi_train, tree_train,
          tensor_X_rej_train, tensor_C_rej_train, tensor_y_rej_train,)  \
             = self.first_expert.cy_epoch_trainer._save_selected_results(
-            loader = self.init_train_data_loader,
-            iteration = 1,
-            mode = "train"
-        )
+            loader=self.init_train_data_loader, expert=1, mode="train")
 
         (tensor_X, tensor_C, tensor_y_acc, fi, tree,
         tensor_X_rej_val, tensor_C_rej_val, tensor_y_rej_val,) \
             = self.first_expert.cy_epoch_trainer._save_selected_results(
-            loader = self.init_valid_data_loader,
-            iteration = 1,
-            mode = "valid"
-        )
+            loader=self.init_valid_data_loader, expert=1, mode="valid")
 
         # get the config for the second expert
         config_joint_cbm = self.config.rest_configs[0]
@@ -77,18 +71,12 @@ class HierarchicalLeakageTrainer:
         (tensor_X_train, tensor_C_train, tensor_y_acc_train, fi_train, tree_train,
          tensor_X_rej_train, tensor_C_rej_train, tensor_y_rej_train,)  \
             = self.first_joint_expert.epoch_trainer._save_selected_results(
-            loader = self.init_train_data_loader,
-            iteration = 2,
-            mode = "train"
-        )
+            loader=self.init_train_data_loader, expert=2, mode="train")
 
         (tensor_X, tensor_C, tensor_y_acc, fi, tree,
         tensor_X_rej_val, tensor_C_rej_val, tensor_y_rej_val,) \
             = self.first_joint_expert.epoch_trainer._save_selected_results(
-            loader = self.init_valid_data_loader,
-            iteration = 2,
-            mode = "valid"
-        )
+            loader=self.init_valid_data_loader, expert=2, mode="valid")
 
         # get the config for the second expert
         config_joint_cbm = self.config.rest_configs[1]
@@ -125,18 +113,12 @@ class HierarchicalLeakageTrainer:
         (tensor_X_train, tensor_C_train, tensor_y_acc_train, fi_train, tree_train,
          tensor_X_rej_train, tensor_C_rej_train, tensor_y_rej_train,)  \
             = self.second_joint_expert.epoch_trainer._save_selected_results(
-            loader = new_train_data_loader,
-            iteration = 3,
-            mode = "train"
-        )
+            loader=new_train_data_loader, expert=3, mode="train")
 
         (tensor_X, tensor_C, tensor_y_acc, fi, tree,
         tensor_X_rej_val, tensor_C_rej_val, tensor_y_rej_val,) \
             = self.second_joint_expert.epoch_trainer._save_selected_results(
-            loader = new_valid_data_loader,
-            iteration = 3,
-            mode = "valid"
-        )
+            loader=new_valid_data_loader, expert=3, mode="valid")
 
         # get the config for the second expert
         config_joint_cbm = self.config.rest_configs[2]
@@ -173,18 +155,12 @@ class HierarchicalLeakageTrainer:
         (tensor_X_train, tensor_C_train, tensor_y_acc_train, fi_train, tree_train,
          tensor_X_rej_train, tensor_C_rej_train, tensor_y_rej_train,)  \
             = self.third_joint_expert.epoch_trainer._save_selected_results(
-            loader = new_train_data_loader,
-            iteration = 4,
-            mode = "train"
-        )
+            loader=new_train_data_loader, expert=4, mode="train")
 
         (tensor_X, tensor_C, tensor_y_acc, fi, tree,
         tensor_X_rej_val, tensor_C_rej_val, tensor_y_rej_val,) \
             = self.third_joint_expert.epoch_trainer._save_selected_results(
-            loader = new_valid_data_loader,
-            iteration = 4,
-            mode = "valid"
-        )
+            loader=new_valid_data_loader, expert=4, mode="valid")
 
         # get the config for the second expert
         # config_ind_cbm = self.config.rest_configs[1]

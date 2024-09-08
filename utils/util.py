@@ -214,4 +214,3 @@ def compute_class_weights(
                 [attribute_count[0]/attribute_count[1]]
             )
     return task_class_weights
-

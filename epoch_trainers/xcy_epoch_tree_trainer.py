@@ -1,3 +1,5 @@
+import os
+import pickle
 import sys
 
 import numpy as np
@@ -7,7 +9,7 @@ from tqdm import tqdm
 
 from base.epoch_trainer_base import EpochTrainerBase
 from loggers.joint_cbm_logger import JointCBMLogger
-from loggers.cy_logger import CYLogger
+from utils import compute_AUC, column_get_correct, get_correct
 
 class XCY_Tree_Epoch_Trainer(EpochTrainerBase):
     """
@@ -215,16 +217,6 @@ class XCY_Tree_Epoch_Trainer(EpochTrainerBase):
             if epoch % self.sr_training_freq == 0:
                 self._train_surrogate_sequential_mode(epoch)
 
-        if self.do_validation:
-            self._valid_epoch(epoch)
-
-        # Update the epoch metrics
-        self.metrics_tracker.end_epoch()
-        log = self.metrics_tracker.result_epoch()
-
-        if self.lr_scheduler is not None:
-            self.lr_scheduler.step()
-
         # visualize last tree
         if epoch != 0 and (epoch % self.config['regularisation']['snapshot_epochs'] == 0
                            or epoch == self.epochs_warm_up):
@@ -235,7 +227,18 @@ class XCY_Tree_Epoch_Trainer(EpochTrainerBase):
                                  train_acc='None',
                                  val_acc='None',
                                  mode='train',
-                                 iteration=None)
+                                 expert=None)
+
+        if self.do_validation:
+            self._valid_epoch(epoch)
+
+        # Update the epoch metrics
+        self.metrics_tracker.end_epoch()
+        log = self.metrics_tracker.result_epoch()
+
+        if self.lr_scheduler is not None:
+            self.lr_scheduler.step()
+
         return log
 
 
@@ -333,6 +336,121 @@ class XCY_Tree_Epoch_Trainer(EpochTrainerBase):
                     t.set_postfix(
                         batch_id='{0}'.format(batch_idx + 1))
                     t.update()
+
+    def _test(self, test_data_loader):
+
+        self.model.eval()
+
+        tensor_C_pred = torch.FloatTensor().to(self.device)
+        tensor_y_pred = torch.FloatTensor().to(self.device)
+
+        test_metrics = {"concept_loss": 0, "loss_per_concept": np.zeros(self.num_concepts), "total_correct": 0,
+                        "accuracy_per_concept": np.zeros(self.num_concepts),
+                        "loss": 0, "target_loss": 0, "accuracy": 0, "APL": 0, "fidelity": 0,
+                        "feature_importance": [], "APL_predictions": []}
+
+        with torch.no_grad():
+            with tqdm(total=len(test_data_loader), file=sys.stdout) as t:
+                for batch_idx, (X_batch, C_batch, y_batch) in enumerate(test_data_loader):
+
+                    batch_size = X_batch.size(0)
+                    X_batch = X_batch.to(self.device)
+                    C_batch = C_batch.to(self.device)
+                    y_batch = y_batch.to(self.device)
+
+                    # Forward pass
+                    C_pred = self.model.mn_model.concept_predictor(X_batch)
+
+                    # Track number of corrects per concept
+                    correct_per_column = column_get_correct(C_pred, C_batch)
+                    test_metrics["accuracy_per_concept"] += np.array([x for x in correct_per_column])
+
+                    C_pred = torch.sigmoid(C_pred)
+                    tensor_C_pred = torch.cat((tensor_C_pred, C_pred), dim=0)
+                    y_pred = self.model.mn_model.label_predictor(C_pred)
+                    tensor_y_pred = torch.cat((tensor_y_pred, y_pred), dim=0)
+                    outputs = {"prediction_out": y_pred}
+
+                    # Calculate Concept losses
+                    loss_concept_total = self.criterion_concept(C_pred, C_batch)
+                    bce_loss_per_concept = self.criterion_per_concept(C_pred, C_batch)
+                    bce_loss_per_concept = torch.mean(bce_loss_per_concept, dim=0).detach().cpu().numpy()
+
+                    test_metrics["concept_loss"] += loss_concept_total.detach().cpu().item() * batch_size
+                    test_metrics["loss_per_concept"] += np.array([x * batch_size for x in bce_loss_per_concept])
+
+                    # Calculate Label losses
+                    test_metrics["total_correct"] += get_correct(y_pred, y_batch, self.config["dataset"]["num_classes"])
+                    loss_label = self.criterion_label(outputs, y_batch)
+                    test_metrics["target_loss"] += loss_label["target_loss"].detach().cpu().item() * batch_size
+
+                    # use all predictions in the last batch
+                    if (batch_idx == len(test_data_loader) - 1):
+                        # Calculate the APL
+                        APL, fid, fi, tree = self._calculate_APL(
+                            self.min_samples_leaf, tensor_C_pred, tensor_y_pred)
+                        test_metrics["APL"] = APL
+                        test_metrics["fidelity"] = fid
+                        test_metrics["feature_importance"] = fi
+
+                        # if (epoch == self.epochs - 1) and self.selective_net == False:
+                        #     # visualize last tree
+                        #     self._visualize_tree(tree, self.config, epoch, APL,
+                        #                          'None', 'None', mode='val',
+                        #                          iteration=str(self.iteration) + '_joint')
+
+                        # if (epoch == self.epochs - 1) and self.selective_net == False:
+                        #     self._build_tree_with_fixed_roots(
+                        #         self.min_samples_leaf, C_pred, y_pred,
+                        #         self.gt_val_tree, 'val', None,
+                        #         iteration=str(self.iteration) + '_joint'
+                        #     )
+
+                    loss = self.alpha * loss_concept_total + loss_label["target_loss"]
+                    test_metrics["loss"] += loss.detach().cpu().item() * batch_size
+
+                    t.set_postfix(
+                        batch_id='{0}'.format(batch_idx + 1))
+                    t.update()
+
+        # Update the test metrics
+        test_metrics["loss"] /= len(test_data_loader.dataset)
+        test_metrics["accuracy"] = test_metrics["total_correct"] / len(test_data_loader.dataset)
+        test_metrics["concept_loss"] /= len(test_data_loader.dataset)
+        test_metrics["loss_per_concept"] = [x / len(test_data_loader.dataset) for x in test_metrics["loss_per_concept"]]
+        test_metrics["accuracy_per_concept"] = [x / len(test_data_loader.dataset) for x in test_metrics["accuracy_per_concept"]]
+        test_metrics["concept_accuracy"] = sum(test_metrics["accuracy_per_concept"]) / len(test_metrics["accuracy_per_concept"])
+        test_metrics["target_loss"] /= len(test_data_loader.dataset)
+
+        # save test metrics in pickle
+        with open(os.path.join(self.config.save_dir, f"test_metrics.pkl"), "wb") as f:
+            pickle.dump(test_metrics, f)
+
+        # print test metrics
+        print("Test Metrics:")
+        print(f"Loss: {test_metrics['loss']}")
+        print(f"Accuracy: {test_metrics['accuracy']}")
+        print(f"Concept Loss: {test_metrics['concept_loss']}")
+        print(f"Loss per Concept: {test_metrics['loss_per_concept']}")
+        print(f"Concept Accuracy: {test_metrics['concept_accuracy']}")
+        print(f"Accuracy per Concept: {test_metrics['accuracy_per_concept']}")
+        print(f"Target Loss: {test_metrics['target_loss']}")
+        print(f"APL: {test_metrics['APL']}")
+        print(f"Fidelity: {test_metrics['fidelity']}")
+        print(f"Feature Importance: {test_metrics['feature_importance']}")
+
+        # put also in the logger info
+        self.logger.info(f"Test Metrics:")
+        self.logger.info(f"Loss: {test_metrics['loss']}")
+        self.logger.info(f"Accuracy: {test_metrics['accuracy']}")
+        self.logger.info(f"Concept Loss: {test_metrics['concept_loss']}")
+        self.logger.info(f"Loss per Concept: {test_metrics['loss_per_concept']}")
+        self.logger.info(f"Concept Accuracy: {test_metrics['concept_accuracy']}")
+        self.logger.info(f"Accuracy per Concept: {test_metrics['accuracy_per_concept']}")
+        self.logger.info(f"Target Loss: {test_metrics['target_loss']}")
+        self.logger.info(f"APL: {test_metrics['APL']}")
+        self.logger.info(f"Fidelity: {test_metrics['fidelity']}")
+        self.logger.info(f"Feature Importance: {test_metrics['feature_importance']}")
 
     def _train_surrogate_sequential_mode(self, epoch):
         """

@@ -76,6 +76,58 @@ def get_leaf_samples_and_features(tree, X):
 
     return leaf_samples_indices, leaf_features_per_path
 
+
+def get_decision_path_features_and_thresholds(tree, X):
+    """
+    Returns a simplified dictionary with the features used per decision path and their corresponding thresholds
+    for each leaf node. Assigns 0 or 1 based on whether the feature satisfies the inequality for the given input.
+
+    Parameters:
+    - tree: An instance of the CustomDecisionTree
+    - X: The input data samples
+
+    Returns:
+    - decision_path_dict: Simplified dictionary with leaf node indices as keys and dictionaries of features and their
+                          corresponding threshold satisfaction (0 or 1) as values.
+    """
+    decision_path_dict = {}  # Initialize the dictionary to store the paths
+
+    # Get the decision paths using the custom decision_path function
+    decision_paths = tree.decision_path(X)
+
+    for i, inputs in enumerate(X):
+        current_path_dict = {}
+        current_path_nodes = decision_paths.node_indices[
+                             decision_paths.node_indptr[i]:
+                             decision_paths.node_indptr[i + 1]]
+        current_path_features = decision_paths.feature_indices[
+                                decision_paths.feature_indptr[i]:
+                                decision_paths.feature_indptr[i + 1]]
+
+        node = tree.tree  # Start from the root node
+        for j, current_node_id in enumerate(current_path_nodes[:-1]):  # Exclude the leaf node
+            feature_index = current_path_features[j]
+            threshold = node.threshold  # Get the threshold of the current node
+            feature_value = inputs[feature_index]
+
+            # Assign 0 if the feature value satisfies the inequality, 1 otherwise
+            current_path_dict[feature_index] = 0 if feature_value < threshold else 1
+
+            # Move to the next node in the path
+            if feature_value < threshold:
+                node = node.left
+            else:
+                node = node.right
+
+        # Get the leaf node
+        leaf_node = current_path_nodes[-1]  # The last node in the path is the leaf
+
+        # If this leaf has not been added to the dictionary yet, add it
+        if leaf_node not in decision_path_dict:
+            decision_path_dict[leaf_node] = current_path_dict
+
+    return decision_path_dict
+
 def get_features_used_in_path(tree, X):
     """Get the feature indices used in the decision path to each leaf node."""
     decision_paths = tree.decision_path(X)
@@ -509,6 +561,47 @@ def calculate_feature_similarity(tree1, tree2):
 
     return similarity
 
+
+def prune_tree(decision_tree):
+    """
+    Prunes the decision tree by removing branches where the parent node
+    and both child nodes have the same classification.
+
+    Parameters:
+    decision_tree (sklearn.tree.DecisionTreeClassifier or sklearn.tree.DecisionTreeRegressor): The decision tree to be pruned.
+    """
+
+    def is_leaf(node_id):
+        return (decision_tree.children_left[node_id] == _tree.TREE_LEAF and
+                decision_tree.children_right[node_id] == _tree.TREE_LEAF)
+
+    def prune_node(node_id):
+        left_child = decision_tree.children_left[node_id]
+        right_child = decision_tree.children_right[node_id]
+
+        # Check if both children are leaves
+        if is_leaf(left_child) and is_leaf(right_child):
+            # Get the classes of the parent and both children
+            parent_class = decision_tree.value[node_id].argmax()
+            left_class = decision_tree.value[left_child].argmax()
+            right_class = decision_tree.value[right_child].argmax()
+
+            # Prune if both children and parent have the same class
+            if parent_class == left_class == right_class:
+                decision_tree.children_left[node_id] = _tree.TREE_LEAF
+                decision_tree.children_right[node_id] = _tree.TREE_LEAF
+
+    def prune_recursively(node_id):
+        # If not a leaf, first prune children
+        if not is_leaf(node_id):
+            left_child = decision_tree.children_left[node_id]
+            right_child = decision_tree.children_right[node_id]
+            prune_recursively(left_child)
+            prune_recursively(right_child)
+            prune_node(node_id)
+
+    # Start pruning from the root
+    prune_recursively(0)
 
 def find_highest_similarity_pair(trees_list1, trees_list2, feature_names):
     max_similarity = -1

@@ -10,7 +10,7 @@ from base import TrainerBase
 from networks.custom_decision_with_fixed_top_nodes import CustomDecisionTree, tree_to_dict, \
     export_tree
 from utils.tree_utils import get_light_colors, replace_splits, \
-    modify_dot_with_colors, weighted_node_count
+    modify_dot_with_colors, weighted_node_count, prune_tree
 
 
 class EpochTrainerBase(TrainerBase):
@@ -64,8 +64,9 @@ class EpochTrainerBase(TrainerBase):
         return APL, fid, list(tree.feature_importances_), tree
 
     def _visualize_tree(self, tree, config, epoch, APL, train_acc, val_acc,
-                        mode, iteration=None):
+                        mode, expert=None):
 
+        prune_tree(tree.tree_)
         # export tree
         dot_data = export_graphviz(
             decision_tree=tree,
@@ -74,7 +75,7 @@ class EpochTrainerBase(TrainerBase):
             rounded=True,
             special_characters=True,
             feature_names=config['dataset']['concept_names'],
-            #class_names=self.reduced_class_names,
+            class_names=self.reduced_class_names,
         )
 
         fig_path = str(self.config.log_dir) + '/trees'
@@ -84,19 +85,18 @@ class EpochTrainerBase(TrainerBase):
         # graph.write_png(fig_path + f'/tree_{epoch}_nodes_'
         #                 f'{APL}_train_acc_{train_acc:.4f}_'
         #                 f'test_acc_{val_acc:.4f}.png')
-        if iteration is not None:
-            name = f'mode_{mode}_expert_{iteration}_nodes_{APL}'
+        if expert is not None:
+            name = f'mode_{mode}_expert_{expert}_nodes_{APL}'
         else:
             name = f'mode_{mode}_epoch_{epoch}_nodes_{APL}'
 
         # Modify the dot data to include the specific colors
-        # dot_data_with_colors = replace_splits(dot_data)
-        # dot_data_with_colors = modify_dot_with_colors(
-        #     dot_data_with_colors, self.reduced_colors_dict, tree.tree_
-        # )
+        dot_data_with_colors = replace_splits(dot_data)
+        dot_data_with_colors = modify_dot_with_colors(
+            dot_data_with_colors, self.reduced_colors_dict, tree.tree_
+        )
         # # Render the graph
-        # graph = graphviz.Source(dot_data_with_colors, directory=fig_path)
-        graph = graphviz.Source(dot_data, directory=fig_path)
+        graph = graphviz.Source(dot_data_with_colors, directory=fig_path)
         graph.render(name, format="pdf", cleanup=True)
 
     def _build_tree_with_fixed_roots(self, min_samples_leaf, C_pred, outputs,

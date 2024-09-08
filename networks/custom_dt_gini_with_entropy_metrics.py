@@ -3,7 +3,7 @@ import graphviz
 import os
 
 from scipy.stats import entropy
-from data_loaders import get_mnist_dataLoader, get_mnist_dataLoader_original
+from data_loaders import get_mnist_dataLoader_original
 from utils.tree_utils import get_light_colors
 
 class DecisionPath:
@@ -266,7 +266,7 @@ class CustomDecisionTree:
                 threshold = node.threshold
                 # Handle the special case for fixed splits
                 if threshold == 0.5:
-                    threshold_str = "== 0"
+                    threshold_str = "<= 0.5"
                     fillcolor = light_grey
                 else:
                     threshold_str = f"<= {self._custom_print(threshold)}"
@@ -401,6 +401,143 @@ class CustomDecisionTree:
         graph = graphviz.Source("\n".join(dot_data))
         graph.render(filename=file_name, format='png', cleanup=True)
 
+    def export_decision_paths_simplified(self, decision_paths, feature_names,
+                                         feature_groups, class_colors,
+                                         class_names,
+                                         output_dir="decision_paths_simplified",
+                                         leaf_id=None):
+
+        # Define the colors for different conditions
+        light_grey = "#DDDDDD"  # Grey color
+        light_yellow = "#F7F7F7"  # Light grey color
+
+        # Create output directory if it doesn't exist
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        # Retrieve the node path for the first sample
+        node_path = decision_paths.node_indices[
+                    decision_paths.node_indptr[0]: decision_paths.node_indptr[
+                        1]]
+
+        # Initialize dot data
+        dot_data = ["digraph Tree {"]
+        dot_data.append(
+            'node [shape=box, style="filled, rounded", fontname="helvetica"] ;')
+        dot_data.append('edge [fontname="helvetica"] ;')
+
+        # Dictionary to keep track of printed groups
+        printed_groups = {}
+
+        # List to keep the labels of the nodes to be consolidated
+        consolidated_labels = []
+
+        # Extract full path first, similar to export_decision_paths
+        for i, node_id in enumerate(node_path):
+            node = self._get_node_by_id(node_id)
+
+            if node.left or node.right:
+                threshold = node.threshold
+                feature_name = feature_names[node.feature_index]
+
+                # Determine the feature group for this feature
+                feature_group = None
+                for group, features in feature_groups.items():
+                    if feature_name in features:
+                        feature_group = group
+                        break
+
+                # Determine if the path goes to the left or right child
+                if i < len(node_path) - 1:
+                    next_node_id = node_path[i + 1]
+                    if next_node_id == node.left.id:
+                        decision_satisfied = True
+                    else:
+                        decision_satisfied = False
+
+                if feature_group is not None:
+                    # Apply filtering criteria
+                    if feature_group not in printed_groups:
+                        if decision_satisfied == False and threshold == 0.5:
+                            # If decision is not satisfied and threshold == 0.5, print "feature == 1"
+                            label = f"{feature_name} == 1"
+                            printed_groups[
+                                feature_group] = 'printed'  # Mark the group as printed and only allow "== 1" condition
+                            consolidated_labels = [lbl for lbl in
+                                                   consolidated_labels if lbl[
+                                                       1] != feature_group]  # Remove previous entries from this group
+                            consolidated_labels.append((label, feature_group))
+                        else:
+                            # Collect all features in this group present in the path
+                            group_features_in_path = [
+                                feature_names[
+                                    decision_paths.feature_indices[idx]]
+                                for idx in
+                                range(decision_paths.feature_indptr[i],
+                                      decision_paths.feature_indptr[i + 1])
+                                if feature_names[
+                                       decision_paths.feature_indices[idx]] in
+                                   feature_groups[feature_group]
+                            ]
+                            missing_features = [f"{f} == 1" for f in
+                                                feature_groups[feature_group] if
+                                                f not in group_features_in_path]
+                            label = " OR ".join(missing_features)
+                            printed_groups[
+                                feature_group] = 'observed'  # Mark the group as observed but not printed as "== 1"
+                            consolidated_labels.append((label, feature_group))
+                    elif printed_groups[
+                        feature_group] == 'observed' and decision_satisfied == False and threshold == 0.5:
+                        # If condition is met later, remove previous entries from this group and print only "feature == 1"
+                        label = f"{feature_name} == 1"
+                        printed_groups[feature_group] = 'printed'
+                        consolidated_labels = [lbl for lbl in
+                                               consolidated_labels if lbl[
+                                                   1] != feature_group]  # Remove previous entries from this group
+                        consolidated_labels.append((label, feature_group))
+                else:
+                    # No feature group, so add normally
+                    if decision_satisfied:
+                        threshold_str = f"<= {self._custom_print(threshold)}"
+                    else:
+                        threshold_str = f"> {self._custom_print(threshold)}"
+
+                    label = f"{feature_name} {threshold_str}"
+                    consolidated_labels.append((label, None))
+            else:
+                # Leaf node: store it separately for final connection
+                leaf_node = node
+
+        # Combine all consolidated labels into a single node
+        consolidated_label = "\\n".join([lbl[0] for lbl in consolidated_labels])
+        consolidated_node_id = "consolidated_node"
+        dot_data.append(
+            f'{consolidated_node_id} [label="{consolidated_label}", fillcolor="{light_yellow}"] ;')
+
+        # Add the leaf node with full details
+        fillcolor = class_colors[leaf_node.predicted_class % len(class_colors)]
+        value_str = "\\n".join(
+            [f"{class_names[i]}: {leaf_node.num_samples_per_class[i]}" for i in
+             range(len(class_names)) if leaf_node.num_samples_per_class[i] > 0])
+        leaf_label = f"gini = {leaf_node.gini:.2f}\\nsamples = {leaf_node.num_samples}\\n{value_str}\\nclass = {class_names[leaf_node.predicted_class]}"
+        dot_data.append(
+            f'{leaf_node.id} [label="{leaf_label}", fillcolor="{fillcolor}"] ;')
+
+        # Connect the consolidated node to the leaf node
+        dot_data.append(f'{consolidated_node_id} -> {leaf_node.id} ;')
+
+        dot_data.append("}")
+
+        # Save the dot file
+        file_name = os.path.join(output_dir,
+                                 f"decision_path_leaf_{leaf_id}.dot")
+        with open(file_name, "w") as f:
+            f.write("\n".join(dot_data))
+
+        # Render the graph as PDF
+        graph = graphviz.Source("\n".join(dot_data))
+        graph.render(filename=file_name, format='pdf', cleanup=True)
+
     def _get_node_by_id(self, node_id):
         # Helper function to get a node by its id
         stack = [self.tree]
@@ -529,6 +666,230 @@ class CustomDecisionTree:
         graph = graphviz.Source("\n".join(dot_data))
         graph.render(filename=file_name, format='pdf', cleanup=True)
 
+    def export_decision_paths_with_subtree_simplified(self, decision_paths,
+                                                      original_node_ids,
+                                                      feature_names,
+                                                      feature_groups,
+                                                      class_colors, class_names,
+                                                      output_dir="decision_paths_simplified",
+                                                      leaf_id=None):
+        def format_values(values, class_names):
+            value_str = ""
+            for i, count in enumerate(values):
+                if count > 0:
+                    value_str += f"{class_names[i]}: {count}\\n"
+            return value_str.strip()
+
+        def add_node(node, node_id):
+            if node.left or node.right:
+                threshold = node.threshold
+                if threshold == 0.5:
+                    threshold_str = "== 0"
+                    fillcolor = light_grey
+                else:
+                    threshold_str = f"<= {self._custom_print(threshold)}"
+                    fillcolor = light_yellow
+
+                dot_data.append(
+                    f'{node_id} [label="{feature_names[node.feature_index]} {threshold_str}\\n'
+                    f'gini = {node.gini:.2f}\\nsamples = {node.num_samples}\\n'
+                    f'class = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
+
+                left_id = node_id * 2 + 1
+                right_id = node_id * 2 + 2
+                add_node(node.left, left_id)
+                add_node(node.right, right_id)
+                dot_data.append(f'{node_id} -> {left_id} ;')
+                dot_data.append(f'{node_id} -> {right_id} ;')
+            else:
+                # Leaf node: use the color of the predicted class
+                fillcolor = class_colors[
+                    node.predicted_class % len(class_colors)]
+                value_str = format_values(node.num_samples_per_class,
+                                          class_names)
+                dot_data.append(
+                    f'{node_id} [label="gini = {node.gini:.2f}\\nsamples = {node.num_samples}\\n'
+                    f'{value_str}\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
+
+
+        # Define the colors for different conditions
+        light_grey = "#DDDDDD"  # Grey color
+        light_yellow = "#F7F7F7"  # Light grey color
+
+        # Create output directory if it doesn't exist
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        # Retrieve the node path for the new decision paths
+        new_node_path = decision_paths.node_indices[
+                        decision_paths.node_indptr[0]:
+                        decision_paths.node_indptr[1]]
+
+        # Initialize dot data
+        dot_data = ["digraph Tree {"]
+        dot_data.append(
+            'node [shape=box, style="filled, rounded", fontname="helvetica"] ;')
+        dot_data.append('edge [fontname="helvetica"] ;')
+
+        # Dictionary to keep track of printed groups
+        printed_groups = {}
+
+        # List to keep the labels of the nodes to be consolidated
+        consolidated_labels = []
+
+        # Variable to store the consolidated node ID
+        consolidated_node_id = "consolidated_node"
+
+        # Traverse the new decision path
+        i = 0
+        while i < len(new_node_path):
+            node_id = new_node_path[i]
+            node = self._get_node_by_id(node_id)
+
+            # Check if this node is in the list of original node IDs
+            if node_id in original_node_ids:
+                # Consolidate all previous nodes
+                if consolidated_labels:
+                    # Determine the maximum length of the first part of the labels
+                    first_parts = [l.split('::', 1)[0] for l, _ in
+                                   consolidated_labels]
+                    max_length_first_part = max(
+                        len(part) for part in first_parts)
+
+                    formatted_labels = []
+                    for lbl, feature_group in consolidated_labels:
+                        if "OR" in lbl:
+                            # Extract the feature group and the names after the underscore
+                            group_name = feature_group
+                            feature_names_split = [f.split('::', 1)[1] for f in
+                                                   lbl.split(" OR ")]
+                            # Apply formatting: bold dark red for group name, blue only for OR operator
+                            formatted_label = f'<b><font color="darkred">{group_name}</font></b>: [<font color="black">' + '</font> <font color="blue">OR</font> <font color="black">'.join(
+                                feature_names_split) + '</font>]'
+                        else:
+                            # Split the label at the underscore and format the parts
+                            first_part, second_part = lbl.split('::', 1)
+                            # Concatenate directly with a colon for alignment
+                            formatted_label = f'<b><font color="darkred">{first_part}</font></b>: {second_part}'
+
+                        # Wrap the label in a table row for proper alignment
+                        formatted_labels.append(
+                            f'<TR><TD ALIGN="LEFT">{formatted_label}</TD></TR>')
+
+                    # Create a table for the consolidated label
+                    consolidated_label = f'<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" ALIGN="LEFT">{" ".join(formatted_labels)}</TABLE>'
+                    dot_data.append(
+                        f'{consolidated_node_id} [label=<{consolidated_label}>, fillcolor="{light_grey}"] ;')
+                    dot_data.append(f'{consolidated_node_id} -> {node_id} ;')
+
+                # Add the current node and print the entire subtree below it
+                add_node(node, node_id)
+                break  # Stop further traversal since we are printing the entire subtree
+
+            else:
+                # Prepare nodes for consolidation
+                threshold = node.threshold
+                feature_name = feature_names[node.feature_index]
+
+                # Determine the feature group for this feature
+                feature_group = None
+                for group, features in feature_groups.items():
+                    if feature_name in features:
+                        feature_group = group
+                        break
+
+                # Determine if the path goes to the left or right child
+                if i < len(new_node_path) - 1:
+                    next_node_id = new_node_path[i + 1]
+                    if next_node_id == node.left.id:
+                        decision_satisfied = True
+                    else:
+                        decision_satisfied = False
+
+                if feature_group is not None:
+                    # Apply filtering criteria
+                    if feature_group not in printed_groups:
+                        if decision_satisfied == False and threshold == 0.5:
+                            # If decision is not satisfied and threshold == 0.5, print "feature == 1"
+                            label = f"{feature_name}"
+                            printed_groups[
+                                feature_group] = 'printed'  # Mark the group as printed and only allow "== 1" condition
+                            consolidated_labels = [lbl for lbl in
+                                                   consolidated_labels if lbl[
+                                                       1] != feature_group]  # Remove previous entries from this group
+                            consolidated_labels.append((label, feature_group))
+                        else:
+                            # Collect all features in this group present in the path
+                            group_features_in_path = [
+                                feature_names[
+                                    decision_paths.feature_indices[idx]]
+                                for idx in
+                                range(decision_paths.feature_indptr[i],
+                                      decision_paths.feature_indptr[i + 1])
+                                if feature_names[
+                                       decision_paths.feature_indices[idx]] in
+                                   feature_groups[feature_group]
+                            ]
+                            missing_features = [f"{f}" for f in
+                                                feature_groups[feature_group] if
+                                                f not in group_features_in_path]
+                            label = " OR ".join(missing_features)
+                            printed_groups[
+                                feature_group] = 'observed'  # Mark the group as observed but not printed as "== 1"
+                            consolidated_labels.append((label, feature_group))
+                    elif printed_groups[
+                        feature_group] == 'observed' and decision_satisfied == False and threshold == 0.5:
+                        # If condition is met later, remove previous entries from this group and print only "feature == 1"
+                        label = f"{feature_name} "
+                        printed_groups[feature_group] = 'printed'
+                        consolidated_labels = [lbl for lbl in
+                                               consolidated_labels if lbl[
+                                                   1] != feature_group]  # Remove previous entries from this group
+                        consolidated_labels.append((label, feature_group))
+                else:
+                    # No feature group, so add normally
+                    if decision_satisfied:
+                        threshold_str = f"<= {self._custom_print(threshold)}"
+                    else:
+                        threshold_str = f"> {self._custom_print(threshold)}"
+
+                    label = f"{feature_name} {threshold_str}"
+                    consolidated_labels.append((label, None))
+
+                i += 1  # Move to the next node
+
+        dot_data.append("}")
+
+        # Save the dot file
+        file_name = os.path.join(output_dir,
+                                 f"decision_path_leaf_{leaf_id}.dot")
+        with open(file_name, "w") as f:
+            f.write("\n".join(dot_data))
+
+        # Render the graph as PDF
+        graph = graphviz.Source("\n".join(dot_data))
+        graph.render(filename=file_name, format='pdf', cleanup=True)
+
+    def get_leaf_node_ids(self):
+        """
+        Return a list of the IDs of all leaf nodes in the decision tree.
+        """
+        leaf_node_ids = []
+
+        def traverse(node):
+            if node is None:
+                return
+            if node.left is None and node.right is None:
+                # This is a leaf node
+                leaf_node_ids.append(node.id)
+            else:
+                # Recursively traverse the left and right children
+                traverse(node.left)
+                traverse(node.right)
+
+        # Start the traversal from the root of the tree
+        traverse(self.tree)
+        return leaf_node_ids
 
 def build_combined_tree(original_tree, leaf_trees, X, y):
     """Construct a new tree where the leaves of the original tree are replaced with new trees."""

@@ -1,5 +1,5 @@
 {
-    "name": "cbm_mnist_L2_0_ind_bs=206",
+    "name": "final_cbm_mnist",
     "n_gpu": 1,
 
     "arch": {
@@ -9,7 +9,7 @@
     "model": {
         "xc_lr": 0.001,
         "xc_weight_decay": 0,
-        "cy_lr": 0.001,
+        "cy_lr": 0.01,
         "cy_weight_decay": 0
     },
     "dataset": {
@@ -27,24 +27,25 @@
         "args":{
             "data_dir": "./datasets/MNIST",
             "type": "SGD",
-            "batch_size": 206
+            "batch_size": 8859
         }
     },
     "trainer": {
         "type": "IndependentCBMTrainer",
-        "hard_cbm": true,
+        "hard_cbm": false,
         "args": {},
         "xc_epochs": 100,
-        "cy_epochs": 15,
+        "cy_epochs": 200,
         "save_dir": "saved/",
         "save_period": 1000,
         "verbosity": 2,
-        "monitor": "min val_loss",
+        "monitor": "off",
         "early_stop": 0,
-        "tensorboard": true
+        "tensorboard": true,
+        "save_test_tensors": false
     },
     "regularisation": {
-        "type": "L2",
+        "type": "None",
         "min_samples_leaf": 150,
         "snapshot_epochs": 50
     }

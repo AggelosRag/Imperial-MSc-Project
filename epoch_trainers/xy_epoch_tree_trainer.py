@@ -202,7 +202,7 @@ class XY_Epoch_Tree_Trainer(EpochTrainerBase):
                                  train_acc='None',
                                  val_acc='None',
                                  mode='train',
-                                 iteration=None)
+                                 expert=None)
 
             if self.config["dataset"]["contour_plot"]:
 

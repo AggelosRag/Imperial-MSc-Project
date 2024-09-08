@@ -66,9 +66,17 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                 batch_size = X_batch.size(0)
                 X_batch = X_batch.to(self.device)
                 C_batch = C_batch.to(self.device)
+                C_batch = C_batch[:, self.arch.selected_concepts]
 
                 # Forward pass
-                C_pred = self.model.concept_predictor(X_batch)
+                C_pred_soft = self.model.concept_predictor(X_batch)
+                C_pred_soft = C_pred_soft[:, self.arch.selected_concepts]
+
+                # Track target training loss and accuracy
+                self.metrics_tracker.track_total_train_correct_per_epoch_per_concept(
+                    preds=C_pred_soft.detach().cpu(), labels=C_batch.detach().cpu()
+                )
+                C_pred = torch.sigmoid(C_pred_soft)
 
                 # Calculate Concept losses
                 loss_concept_total = self.criterion(C_pred, C_batch)
@@ -82,15 +90,6 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                                                   value=list(bce_loss_per_concept.detach().cpu().numpy()),
                                                   batch_size=batch_size,
                                                   mode='train')
-                # Track target training loss and accuracy
-                self.metrics_tracker.track_total_train_correct_per_epoch_per_concept(
-                    preds=C_pred.detach().cpu(), labels=C_batch.detach().cpu()
-                )
-
-                # Track target training loss and accuracy
-                # self.metrics_tracker.track_total_train_correct_per_epoch(
-                #     preds=outputs["prediction_out"], labels=y_batch
-                # )
 
                 self.optimizer.zero_grad()
                 loss_concept_total.backward()
@@ -128,9 +127,17 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                     batch_size = X_batch.size(0)
                     X_batch = X_batch.to(self.device)
                     C_batch = C_batch.to(self.device)
+                    C_batch = C_batch[:, self.arch.selected_concepts]
 
                     # Forward pass
-                    C_pred = self.model.concept_predictor(X_batch)
+                    C_pred_soft = self.model.concept_predictor(X_batch)
+                    C_pred_soft = C_pred_soft[:, self.arch.selected_concepts]
+
+                    # Track target training loss and accuracy
+                    self.metrics_tracker.track_total_val_correct_per_epoch_per_concept(
+                        preds=C_pred_soft.detach().cpu(), labels=C_batch.detach().cpu()
+                    )
+                    C_pred = torch.sigmoid(C_pred_soft)
 
                     # Calculate Concept losses
                     loss_concept_total = self.criterion(C_pred, C_batch)
@@ -146,10 +153,6 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                         value=list(bce_loss_per_concept.detach().cpu().numpy()),
                         batch_size=batch_size,
                         mode='val')
-                    # Track target training loss and accuracy
-                    self.metrics_tracker.track_total_val_correct_per_epoch_per_concept(
-                        preds=C_pred.detach().cpu(), labels=C_batch.detach().cpu()
-                    )
 
                     # Track target training loss and accuracy
                     # self.metrics_tracker.track_total_val_correct_per_epoch(
@@ -192,6 +195,13 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                     # Forward pass
                     C_pred = self.model.concept_predictor(X_batch)
                     C_pred = C_pred[:, self.arch.selected_concepts]
+
+                    # Track number of corrects per concept
+                    correct_per_column = column_get_correct(C_pred, C_batch)
+                    correct_per_column = correct_per_column.detach().cpu().numpy()
+                    test_metrics["accuracy_per_concept"] += np.array([x for x in correct_per_column])
+
+                    C_pred = torch.sigmoid(C_pred)
                     #tensor_X = torch.cat((tensor_X, X_batch), dim=0)
                     tensor_C_pred = torch.cat((tensor_C_pred, C_pred), dim=0)
                     tensor_y = torch.cat((tensor_y, y_batch), dim=0)
@@ -205,12 +215,8 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                     test_metrics["concept_loss"] += loss_concept_total.detach().cpu().item() * batch_size
                     test_metrics["loss_per_concept"] += np.array([x * batch_size for x in bce_loss_per_concept])
 
-                    # Track number of corrects per concept
-                    correct_per_column = column_get_correct(C_pred, C_batch).detach().cpu().numpy()
-                    test_metrics["accuracy_per_concept"] += np.array([x for x in correct_per_column])
-
                     # Find misclassified examples in the current batch
-                    preds = torch.sigmoid(C_pred)
+                    preds = C_pred
                     preds_binary = (preds > 0.5).int()
 
                     misclassified = (preds_binary != C_batch)
@@ -271,7 +277,7 @@ class XC_Epoch_Trainer(EpochTrainerBase):
         self.logger.info(f"Accuracy per Concept: {test_metrics['accuracy_per_concept']}")
 
         # if we use a hard-cbm, convert the predictions to binary
-        tensor_C_pred = torch.sigmoid(tensor_C_pred)
+        #tensor_C_pred = torch.sigmoid(tensor_C_pred)
 
         tensor_C_pred_binarised = tensor_C_pred.clone()
         tensor_C_pred_binarised[tensor_C_pred_binarised >= 0.5] = 1

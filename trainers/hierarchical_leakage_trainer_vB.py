@@ -43,22 +43,12 @@ class HierarchicalLeakageTrainervB:
         (tensor_X_train, tensor_C_train, tensor_y_acc_train, fi_train, tree_train,
          tensor_X_rej_train, tensor_C_rej_train, tensor_y_rej_train,)  \
             = self.first_expert.cy_epoch_trainer._save_selected_results(
-            loader = self.init_train_data_loader,
-            iteration = 1,
-            mode = "train",
-            arch=self.arch,
-            min_samples_leaf_for_gt=500
-        )
+            loader=self.init_train_data_loader, expert=1, mode="train")
 
         (tensor_X, tensor_C, tensor_y_acc, fi, tree,
         tensor_X_rej_val, tensor_C_rej_val, tensor_y_rej_val,) \
             = self.first_expert.cy_epoch_trainer._save_selected_results(
-            loader = self.init_valid_data_loader,
-            iteration = 1,
-            mode = "valid",
-            arch=self.arch,
-            min_samples_leaf_for_gt=500
-        )
+            loader=self.init_valid_data_loader, expert=1, mode="valid")
 
         y_pred = tree_train.predict(tensor_C)
         fid = accuracy_score(tensor_y_acc, y_pred)
@@ -150,22 +140,12 @@ class HierarchicalLeakageTrainervB:
         (tensor_X_train, tensor_C_train, tensor_y_acc_train, fi_train, tree_train,
          tensor_X_rej_train, tensor_C_rej_train, tensor_y_rej_train,)  \
             = self.second_expert.cy_epoch_trainer._save_selected_results(
-            loader = new_train_data_loader,
-            iteration = 2,
-            mode = "train",
-            arch=arch,
-            min_samples_leaf_for_gt=200
-        )
+            loader=new_train_data_loader, expert=2, mode="train")
 
         (tensor_X, tensor_C, tensor_y_acc, fi, tree,
         tensor_X_rej_val, tensor_C_rej_val, tensor_y_rej_val,) \
             = self.second_expert.cy_epoch_trainer._save_selected_results(
-            loader = new_valid_data_loader,
-            iteration = 2,
-            mode = "valid",
-            arch=arch,
-            min_samples_leaf_for_gt=200
-        )
+            loader=new_valid_data_loader, expert=2, mode="valid")
 
         y_pred = tree_train.predict(tensor_C)
         fid = accuracy_score(tensor_y_acc, y_pred)
@@ -264,22 +244,12 @@ class HierarchicalLeakageTrainervB:
         (tensor_X_train, tensor_C_train, tensor_y_acc_train, fi_train, tree_train,
          tensor_X_rej_train, tensor_C_rej_train, tensor_y_rej_train,) \
             = self.third_expert.cy_epoch_trainer._save_selected_results(
-            loader=new_train_data_loader,
-            iteration=3,
-            mode="train",
-            arch=arch,
-            min_samples_leaf_for_gt=200
-        )
+            loader=new_train_data_loader, expert=3, mode="train")
 
         (tensor_X, tensor_C, tensor_y_acc, fi, tree,
          tensor_X_rej_val, tensor_C_rej_val, tensor_y_rej_val,) \
             = self.third_expert.cy_epoch_trainer._save_selected_results(
-            loader=new_valid_data_loader,
-            iteration=3,
-            mode="valid",
-            arch=arch,
-            min_samples_leaf_for_gt=200
-        )
+            loader=new_valid_data_loader, expert=3, mode="valid")
 
         y_pred = tree_train.predict(tensor_C)
         fid = accuracy_score(tensor_y_acc, y_pred)

@@ -219,6 +219,7 @@
                         "Winter_Wren",
                         "Common_Yellowthroat"],
         "concept_names": ["has_bill_shape::dagger", "has_bill_shape::hooked_seabird", "has_bill_shape::all-purpose", "has_bill_shape::cone", "has_wing_color::brown", "has_wing_color::grey", "has_wing_color::yellow", "has_wing_color::black", "has_wing_color::white", "has_wing_color::buff", "has_upperparts_color::brown", "has_upperparts_color::grey", "has_upperparts_color::yellow", "has_upperparts_color::black", "has_upperparts_color::white", "has_upperparts_color::buff", "has_underparts_color::brown", "has_underparts_color::grey", "has_underparts_color::yellow", "has_underparts_color::black", "has_underparts_color::white", "has_underparts_color::buff", "has_breast_pattern::solid", "has_breast_pattern::striped", "has_breast_pattern::multi-colored", "has_back_color::brown", "has_back_color::grey", "has_back_color::yellow", "has_back_color::black"],
+        "concept_groups": {"has_bill_shape": ["has_bill_shape::dagger", "has_bill_shape::hooked_seabird", "has_bill_shape::all-purpose", "has_bill_shape::cone"], "has_wing_color": ["has_wing_color::brown", "has_wing_color::grey", "has_wing_color::yellow", "has_wing_color::black", "has_wing_color::white", "has_wing_color::buff"], "has_upperparts_color": ["has_upperparts_color::brown", "has_upperparts_color::grey", "has_upperparts_color::yellow", "has_upperparts_color::black", "has_upperparts_color::white", "has_upperparts_color::buff"], "has_underparts_color": ["has_underparts_color::brown", "has_underparts_color::grey", "has_underparts_color::yellow", "has_underparts_color::black", "has_underparts_color::white", "has_underparts_color::buff"], "has_breast_pattern": ["has_breast_pattern::solid", "has_breast_pattern::striped", "has_breast_pattern::multi-colored"], "has_back_color": ["has_back_color::brown", "has_back_color::grey", "has_back_color::yellow", "has_back_color::black"]},
         "indices_to_keep_from_or_concept_list": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28],
         "contour_plot": false,
         "use_attribute_imbalance": true
@@ -242,7 +243,7 @@
         "early_stop": 0,
         "tensorboard": true,
         "save_test_tensors": false,
-        "save_train_tensors": true
+        "save_train_tensors": false
     },
     "regularisation": {
         "type": "L2",

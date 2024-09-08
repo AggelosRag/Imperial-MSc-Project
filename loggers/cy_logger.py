@@ -207,9 +207,10 @@ class CYLogger:
             full_key = prefix + update_dict_or_key
             if full_key in self.attributes_per_epoch:
                 self.attributes_per_epoch[full_key] += value * batch_size
-            elif full_key in self.tensor_attributes_per_epoch:
-                self.tensor_attributes_per_epoch[full_key] = torch.cat(
-                    (self.tensor_attributes_per_epoch[full_key], value), dim=0)
+            elif self.selectivenet:
+                if full_key in self.tensor_attributes_per_epoch:
+                    self.tensor_attributes_per_epoch[full_key] = torch.cat(
+                        (self.tensor_attributes_per_epoch[full_key], value), dim=0)
             elif full_key in self.list_attributes_per_epoch:
                 self.list_attributes_per_epoch[full_key] += np.array(
                     [x * batch_size for x in value])
@@ -229,8 +230,14 @@ class CYLogger:
         self.all_epoch_attributes["val_accuracy"].append(self.val_accuracy)
 
         for i in range (self.n_classes):
-            self.train_accuracy_per_class[i] /= self.class_counts_train[i]
-            self.val_accuracy_per_class[i] /= self.class_counts_val[i]
+            if i not in self.class_counts_train.keys():
+                self.train_accuracy_per_class[i] = 0
+            else:
+                self.train_accuracy_per_class[i] /= self.class_counts_train[i]
+            if i not in self.class_counts_val.keys():
+                self.val_accuracy_per_class[i] = 0
+            else:
+                self.val_accuracy_per_class[i] /= self.class_counts_val[i]
         self.all_epoch_list_attributes["train_accuracy_per_class"].append(
             (self.train_accuracy_per_class).tolist())
         self.all_epoch_list_attributes["val_accuracy_per_class"].append(

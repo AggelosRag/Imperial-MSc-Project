@@ -10,7 +10,7 @@
         "xc_lr": 0.01,
         "xc_weight_decay": 0.000004,
         "xc_momentum": 0.9,
-        "cy_lr": 0.01,
+        "cy_lr": 0.001,
         "cy_weight_decay": 0,
         "pretrained_concept_predictor": "/notebooks/AR-Imperial-Thesis/saved/models/cub_pretrained/model_best.pth"
     },
@@ -229,10 +229,10 @@
     },
     "trainer": {
         "type": "SequentialCBMTrainer",
-        "hard_cbm": false,
+        "hard_cbm": true,
         "args": {},
         "xc_epochs": 300,
-        "cy_epochs": 20,
+        "cy_epochs": 9,
         "save_dir": "saved/",
         "save_period": 20,
         "verbosity": 2,
@@ -242,7 +242,7 @@
         "save_test_tensors": false
     },
     "regularisation": {
-        "type": "L2",
+        "type": "None",
         "min_samples_leaf": 1,
         "snapshot_epochs": 50
     }

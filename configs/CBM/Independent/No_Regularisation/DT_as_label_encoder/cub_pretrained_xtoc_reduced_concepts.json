@@ -244,7 +244,7 @@
         "save_test_tensors": false
     },
     "regularisation": {
-        "type": "L2",
+        "type": "None",
         "min_samples_leaf": 1,
         "snapshot_epochs": 50
     }

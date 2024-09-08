@@ -11,6 +11,7 @@ from loggers.joint_cbm_logger import JointCBMLogger
 
 from base.epoch_trainer_base import EpochTrainerBase
 from utils import compute_AUC, column_get_correct, get_correct
+from utils.tree_utils import prune_tree
 
 
 class XCY_Epoch_Trainer(EpochTrainerBase):
@@ -94,13 +95,17 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                 X_batch = X_batch.to(self.device)
                 C_hard = C_hard.to(self.device)
                 C_batch = C_batch.to(self.device)
+                C_batch = C_batch[:, self.arch.selected_concepts]
+
                 y_batch = y_batch.to(self.device)
 
                 # Forward pass
                 C_pred_soft = self.model.concept_predictor(X_batch)
+                C_pred_soft = C_pred_soft[:, self.arch.selected_concepts]
+
                 # Track target training loss and accuracy
                 self.metrics_tracker.track_total_train_correct_per_epoch_per_concept(
-                    preds=C_pred_soft, labels=C_batch
+                    preds=C_pred_soft.detach().cpu(), labels=C_batch.detach().cpu()
                 )
                 C_pred_soft = torch.sigmoid(C_pred_soft)
                 C_pred_concat = torch.cat((C_hard, C_pred_soft), dim=1)
@@ -143,9 +148,7 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                     preds=outputs["prediction_out"], labels=y_batch
                 )
 
-                # if we operate in SGD mode, then X_batch + X_rest = X
-                # We still need the complete dataset to compute the APL
-                # In full-batch GD, X_batch = X and X_rest = None
+                # use all predictions in the last batch
                 if (batch_idx == len(self.train_loader) - 1):
                     # Calculate the APL
                     APL, fid, fi, tree = self._calculate_APL(self.min_samples_leaf,
@@ -164,20 +167,6 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                         batch_size=len(self.train_loader.dataset),
                         mode='train')
 
-                    # if (epoch == self.epochs - 1) and self.selective_net == False:
-                    #     # visualize last tree
-                    #     self._visualize_tree(tree, self.config, epoch, APL, 'None',
-                    #                          'None',
-                    #                          iteration=str(self.iteration) + '_joint',
-                    #                          mode='train')
-
-                    # if (epoch == self.epochs - 1) and self.selective_net == False:
-                    #     self._build_tree_with_fixed_roots(
-                    #         self.min_samples_leaf, C_pred, y_pred,
-                    #         self.gt_train_tree, 'train', None,
-                    #         iteration=str(self.iteration) + '_joint'
-                    #     )
-
                 loss = self.alpha * loss_concept_total + loss_label["target_loss"]
 
                 self.optimizer.zero_grad()
@@ -192,6 +181,17 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                     batch_id='{0}'.format(batch_idx + 1))
                 t.update()
 
+        # visualize last tree
+        if epoch == (self.epochs - 1):
+            self._visualize_tree(tree=tree,
+                                 config=self.config,
+                                 epoch=epoch,
+                                 APL=APL,
+                                 train_acc='None',
+                                 val_acc='None',
+                                 mode='train',
+                                 expert=None)
+
         if self.do_validation:
             self._valid_epoch(epoch)
 
@@ -203,6 +203,7 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
             self.lr_scheduler.step()
 
         return log
+
 
 
     def _valid_epoch(self, epoch):
@@ -226,14 +227,18 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                     batch_size = X_batch.size(0)
                     X_batch = X_batch.to(self.device)
                     C_batch = C_batch.to(self.device)
+                    C_batch = C_batch[:, self.arch.selected_concepts]
+
                     C_hard = C_hard.to(self.device)
                     y_batch = y_batch.to(self.device)
 
                     # Forward pass
                     C_pred_soft = self.model.concept_predictor(X_batch)
+                    C_pred_soft = C_pred_soft[:, self.arch.selected_concepts]
+
                     # Track target training loss and accuracy
                     self.metrics_tracker.track_total_val_correct_per_epoch_per_concept(
-                        preds=C_pred_soft, labels=C_batch
+                        preds=C_pred_soft.detach().cpu(), labels=C_batch.detach().cpu()
                     )
                     C_pred_soft = torch.sigmoid(C_pred_soft)
                     C_pred_concat = torch.cat((C_hard, C_pred_soft), dim=1)
@@ -298,9 +303,7 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                         preds=outputs["prediction_out"], labels=y_batch
                     )
 
-                    # if we operate in SGD mode, then X_batch + X_rest = X
-                    # We still need the complete dataset to compute the APL
-                    # In full-batch GD, X_batch = X and X_rest = None
+                    # use all predictions in the last batch
                     if (batch_idx == len(self.val_loader) - 1):
                         # Calculate the APL
                         APL, fid, fi, tree = self._calculate_APL(
@@ -377,10 +380,20 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                     batch_size = X_batch.size(0)
                     X_batch = X_batch.to(self.device)
                     C_batch = C_batch.to(self.device)
+                    C_batch = C_batch[:, self.arch.selected_concepts]
+
                     y_batch = y_batch.to(self.device)
 
                     # Forward pass
                     C_pred = self.model.concept_predictor(X_batch)
+                    C_pred = C_pred[:, self.arch.selected_concepts]
+
+                    # Track number of corrects per concept
+                    correct_per_column = column_get_correct(C_pred, C_batch)
+                    correct_per_column = correct_per_column.detach().cpu().numpy()
+                    test_metrics["accuracy_per_concept"] += np.array([x for x in correct_per_column])
+
+                    C_pred = torch.sigmoid(C_pred)
                     tensor_C_pred = torch.cat((tensor_C_pred, C_pred), dim=0)
                     y_pred = self.model.label_predictor(C_pred)
                     tensor_y_pred = torch.cat((tensor_y_pred, y_pred), dim=0)
@@ -394,18 +407,12 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                     test_metrics["concept_loss"] += loss_concept_total.detach().cpu().item() * batch_size
                     test_metrics["loss_per_concept"] += np.array([x * batch_size for x in bce_loss_per_concept])
 
-                    # Track number of corrects per concept
-                    correct_per_column = column_get_correct(C_pred, C_batch)
-                    test_metrics["accuracy_per_concept"] += np.array([x for x in correct_per_column])
-
                     # Calculate Label losses
                     test_metrics["total_correct"] += get_correct(y_pred, y_batch, self.config["dataset"]["num_classes"])
                     loss_label = self.criterion_label(outputs, y_batch)
                     test_metrics["target_loss"] += loss_label["target_loss"].detach().cpu().item() * batch_size
 
-                    # if we operate in SGD mode, then X_batch + X_rest = X
-                    # We still need the complete dataset to compute the APL
-                    # In full-batch GD, X_batch = X and X_rest = None
+                    # use all predictions in the last batch
                     if (batch_idx == len(test_data_loader) - 1):
                         # Calculate the APL
                         APL, fid, fi, tree = self._calculate_APL(
@@ -474,7 +481,7 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
         self.logger.info(f"Feature Importance: {test_metrics['feature_importance']}")
 
 
-    def _save_selected_results(self, loader, iteration, mode):
+    def _save_selected_results(self, loader, expert, mode):
         tensor_X_rej = torch.FloatTensor().to(self.device)
         tensor_X_acc = torch.FloatTensor().to(self.device)
         tensor_C_rej = torch.FloatTensor().to(self.device)
@@ -570,7 +577,7 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                              train_acc='None',
                              val_acc='None',
                              mode=f'selected_{mode}_samples',
-                             iteration=iteration)
+                             expert=expert)
 
         print(f"APL: {APL}")
         print(f"Fidelity: {fid}")

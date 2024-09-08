@@ -42,7 +42,7 @@ class LeakageInspectionTrainer:
 
         save_dicts = self.config["trainer"]["save_train_tensors"]
         logger = self.config.get_logger('train')
-        if self.expert == 1 or "pretrained_concept_predictor" not in self.config["model"]:
+        if self.expert == 1 and "pretrained_concept_predictor" not in self.config["model"]:
             # train the x->c model
             print("\nTraining x->c")
             logger.info("Training x->c")
@@ -67,6 +67,7 @@ class LeakageInspectionTrainer:
         print(f'Validation Accuracy: {accuracy_score(all_y_val, y_pred)}')
 
         original_tree = copy.deepcopy(self.arch.label_predictor)
+        self.hard_tree = original_tree
         self._visualize_DT_label_predictor(self.arch.label_predictor, X=all_C, path='/original_tree')
 
         # Extract samples per leaf and features used in the decision paths
@@ -80,6 +81,9 @@ class LeakageInspectionTrainer:
         train_y = train_y.detach().cpu().numpy()
         val_C_pred = val_C_pred.detach().cpu().numpy()
         val_y = val_y.detach().cpu().numpy()
+
+        if self.arch.concept_predictor_joint is not None:
+            self.xc_epoch_trainer.model.concept_predictor = self.arch.concept_predictor_joint
 
         # print("\nTraining soft c->y DT label predictor")
         # logger.info("\nTraining soft c->y DT label predictor")
@@ -193,10 +197,15 @@ class LeakageInspectionTrainer:
         print(f'Validation Accuracy of the combined tree: {accuracy_score(val_y, y_pred)}')
 
         self._visualize_DT_label_predictor(self.combined_tree, X=all_C, path='/combined_tree',
-                                           hard_tree=original_tree)
+                                           hard_tree=True)
 
 
     def test(self, test_data_loader, hard_cbm=False):
+
+        logger = self.config.get_logger('train')
+
+        if self.arch.concept_predictor_joint is not None:
+            self.xc_epoch_trainer.model.concept_predictor = self.arch.concept_predictor
 
         save_dicts = self.config["trainer"]["save_test_tensors"]
         # evaluate x->c
@@ -207,6 +216,7 @@ class LeakageInspectionTrainer:
         tensor_y = tensor_y.detach().cpu().numpy()
         y_pred = self.arch.label_predictor.predict(tensor_C_binary_pred)
         print(f'\nTest Accuracy using the Hard CBM: {accuracy_score(tensor_y, y_pred)}')
+        logger.info(f'\nTest Accuracy using the Hard CBM: {accuracy_score(tensor_y, y_pred)}')
 
         if save_dicts:
             new_leaves_per_leaf_samples_indices = {}
@@ -218,8 +228,13 @@ class LeakageInspectionTrainer:
             y_pred_dict = {}
             X_leaf_dict = {}
 
+        if self.arch.concept_predictor_joint is not None:
+            self.xc_epoch_trainer.model.concept_predictor = self.arch.concept_predictor_joint
+
         accuracy_per_original_path_dict = {}
         accuracy_per_new_path_dict = {}
+        y_pred_all = []
+        y_all = []
         for leaf, sample_indices in leaf_samples_indices.items():
             C_leaf, y_leaf = tensor_C_binary_pred[sample_indices], tensor_y[sample_indices]
             X_leaf = self.extract_x_subset_data(test_data_loader, sample_indices)
@@ -230,9 +245,13 @@ class LeakageInspectionTrainer:
             C_leaf_pred[:, leaf_features_not_used] = hard_concepts
             tree = self.leaf_trees[leaf]
             y_pred = tree.predict(C_leaf_pred)
+            y_pred_all.extend(y_pred)
+            y_all.extend(y_leaf.tolist())
             print(f"\nTesting for leaf: {leaf}")
             print(f'Test Accuracy of the original path: {accuracy_score(y_leaf, y_original_pred)}')
             print(f'Test Accuracy of the new path: {accuracy_score(y_leaf, y_pred)}')
+            logger.info(f'Test Accuracy of the original path: {accuracy_score(y_leaf, y_original_pred)}')
+            logger.info(f'Test Accuracy of the new path: {accuracy_score(y_leaf, y_pred)}')
             accuracy_per_original_path_dict[leaf] = accuracy_score(y_leaf, y_original_pred)
             accuracy_per_new_path_dict[leaf] = accuracy_score(y_leaf, y_pred)
 
@@ -280,11 +299,14 @@ class LeakageInspectionTrainer:
         with open(os.path.join(self.config.save_dir, 'leaf_samples_indices.pkl'), 'wb') as f:
             pkl.dump(leaf_samples_indices, f)
 
-        C_leaf_pred, tensor_y = self.xc_epoch_trainer._predict(data_loader=test_data_loader, use_data_loader=True)
-        C_leaf_pred = C_leaf_pred.detach().cpu().numpy()
-        tensor_y = tensor_y.detach().cpu().numpy()
-        y_pred = self.combined_tree.predict(C_leaf_pred)
-        print(f'\nTest Accuracy of the combined tree: {accuracy_score(tensor_y, y_pred)}')
+        # C_leaf_pred, tensor_y = self.xc_epoch_trainer._predict(data_loader=test_data_loader, use_data_loader=True)
+        # C_leaf_pred = C_leaf_pred.detach().cpu().numpy()
+        # tensor_y = tensor_y.detach().cpu().numpy()
+        # y_pred = self.combined_tree.predict(C_leaf_pred)
+        # print(f'\nTest Accuracy of the combined tree: {accuracy_score(tensor_y, y_pred)}')
+        # logger.info(f'\nTest Accuracy of the combined tree: {accuracy_score(tensor_y, y_pred)}')
+        print(f'\nTest Accuracy of the combined tree: {accuracy_score(y_all, y_pred_all)}')
+        logger.info(f'\nTest Accuracy of the combined tree: {accuracy_score(y_all, y_pred_all)}')
 
     def plot_xc(self):
         results_trainer = self.xc_epoch_trainer.metrics_tracker.result()
@@ -445,7 +467,7 @@ class LeakageInspectionTrainer:
             X = torch.stack(X)
         return X
 
-    def _visualize_DT_label_predictor(self, tree, X=None, path=None, hard_tree=None):
+    def _visualize_DT_label_predictor(self, tree, X=None, path=None, hard_tree=False):
 
         colors = get_light_colors(len(self.config['dataset']['class_names']))
         colors_dict = {i: colors[i] for i in range(len(self.config['dataset']['class_names']))}
@@ -484,8 +506,8 @@ class LeakageInspectionTrainer:
         graph.render(name, format="pdf", cleanup=True)
 
         if X is not None:
-            if hard_tree is not None:
-                tree_used_for_paths = hard_tree
+            if hard_tree:
+                tree_used_for_paths = self.hard_tree
             else:
                 tree_used_for_paths = tree
             leaf_indices = tree_used_for_paths.apply(X)
@@ -498,6 +520,16 @@ class LeakageInspectionTrainer:
                                            class_colors=colors,
                                            class_names = self.config['dataset']['class_names'],
                                            output_dir = fig_path + '/decision_paths',
+                                           leaf_id = leaf)
+                or_leaf_node_ids = self.hard_tree.get_leaf_node_ids()
+                decision_paths = tree.decision_path(X[sample_indices])
+                tree.export_decision_paths_with_subtree_simplified(decision_paths,
+                                           original_node_ids=or_leaf_node_ids,
+                                           feature_names = self.config['dataset']['concept_names'],
+                                           feature_groups = self.config['dataset']['concept_groups'],
+                                           class_colors=colors,
+                                           class_names = self.config['dataset']['class_names'],
+                                           output_dir = fig_path + '/decision_paths_simplified',
                                            leaf_id = leaf)
 
 

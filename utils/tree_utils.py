@@ -603,6 +603,88 @@ def prune_tree(decision_tree):
     # Start pruning from the root
     prune_recursively(0)
 
+
+def prune_tree_chaid(tree):
+    """
+    Prunes the CHAID tree by removing branches where the parent node
+    and all child nodes have the same classification.
+
+    Parameters:
+    - tree: The CHAID tree object to be pruned.
+    """
+    def prune_node(node):
+        if node.is_leaf:
+            return
+
+        # Recursively prune child nodes first
+        for category, child_node in list(node.children.items()):
+            if not child_node.is_leaf:
+                prune_node(child_node)
+
+        # Check if all children have the same predicted class as the parent
+        if all(child.is_leaf and child.predicted_class == node.predicted_class for child in node.children.values()):
+            node.is_leaf = True
+            node.children = {}
+            node.num_samples_per_class = np.sum(
+                [child.num_samples_per_class for child in node.children.values()], axis=0
+            ).tolist()
+            node.num_samples = sum(node.num_samples_per_class)
+
+    # Start pruning from the root
+    prune_node(tree.root)
+
+def prune_tree_chaid_working(tree):
+    """
+    Recursively prunes the decision tree by removing branches where the parent node
+    and all child nodes have the same classification.
+
+    Parameters:
+    - tree: The entire decision tree object.
+    """
+
+    def prune_node(node):
+        """
+        Recursively prunes child nodes of the given node.
+
+        Parameters:
+        - node: The current node in the tree.
+        """
+        if node.is_leaf:
+            return
+
+        # Recursively prune child nodes first
+        for category, child in list(
+                node.children.items()):  # Use list() to avoid runtime changes
+            prune_node(child)
+
+        # Check if all children are leaves and have the same class as the parent
+        if all(child.is_leaf for child in node.children.values()):
+            child_classes = {child.predicted_class for child in
+                             node.children.values()}
+
+            # If all children have the same predicted class and match the parent class, prune the children
+            if len(child_classes) == 1:
+                # Remove all child nodes and make the current node a leaf
+                node.children.clear()
+                node.is_leaf = True
+                node.samples = sum(child.samples for child in
+                                   node.children.values())  # Update sample count
+
+    # Start pruning from the root of the tree
+    prune_node(tree.root)
+
+    # Update other properties of the tree as needed
+    tree.node_count = sum(1 for _ in traverse_nodes_chaid(tree.root))
+    return tree
+
+def traverse_nodes_chaid(node):
+    """
+    Generator to traverse nodes in a tree and yield each node.
+    """
+    yield node
+    for child in node.children.values():
+        yield from traverse_nodes_chaid(child)
+
 def find_highest_similarity_pair(trees_list1, trees_list2, feature_names):
     max_similarity = -1
     best_pair = (None, None)

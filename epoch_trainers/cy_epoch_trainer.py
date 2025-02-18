@@ -11,7 +11,7 @@ from sklearn.tree import DecisionTreeClassifier, export_graphviz
 from tqdm import tqdm
 
 from loggers.cy_logger import CYLogger
-from utils.util import compute_AUC, get_correct
+from utils.util import compute_AUC, get_correct, update_pickle_dict
 from base.epoch_trainer_base import EpochTrainerBase
 
 
@@ -39,6 +39,7 @@ class CY_Epoch_Trainer(EpochTrainerBase):
         self.epochs = config['trainer']['cy_epochs']
         self.expert = expert
         self.do_validation = self.val_loader is not None
+        self.acc_metrics_location = self.config.dir + "/accumulated_metrics.pkl"
 
         # check if selective net is used
         if "selectivenet" in config.config.keys():
@@ -142,16 +143,6 @@ class CY_Epoch_Trainer(EpochTrainerBase):
                     batch_id='{0}'.format(batch_idx + 1))
                 t.update()
 
-        # visualize last tree
-        if epoch == (self.epochs - 1):
-            self._visualize_tree(tree=tree,
-                                 config=self.config,
-                                 epoch=epoch,
-                                 APL=APL,
-                                 train_acc='None',
-                                 val_acc='None',
-                                 mode='train',
-                                 expert=self.expert)
 
         if self.do_validation:
             self._valid_epoch(epoch)
@@ -281,6 +272,28 @@ class CY_Epoch_Trainer(EpochTrainerBase):
             self.metrics_tracker.evaluate_incorrectly(selection_threshold=self.config['selectivenet']['selection_threshold'])
             self.metrics_tracker.evaluate_coverage_stats(selection_threshold=self.config['selectivenet']['selection_threshold'])
 
+    def predict(self, test_data_loader):
+
+        self.model.label_predictor.eval()
+        tensor_y_pred = torch.LongTensor().to(self.device)
+
+        with torch.no_grad():
+            with tqdm(total=len(test_data_loader), file=sys.stdout) as t:
+                for batch_idx, (C_pred, y_batch) in enumerate(test_data_loader):
+
+                    C_pred = C_pred.to(self.device)
+                    y_batch = y_batch.to(self.device)
+
+                    # Forward pass
+                    y_pred = self.model.label_predictor(C_pred)
+                    preds = torch.argmax(y_pred, dim=1)
+                    tensor_y_pred = torch.cat((tensor_y_pred, preds), dim=0)
+                    t.set_postfix(
+                        batch_id='{0}'.format(batch_idx + 1))
+                    t.update()
+
+        return tensor_y_pred.cpu()
+
     def _test(self, test_data_loader):
 
         self.model.label_predictor.eval()
@@ -353,6 +366,7 @@ class CY_Epoch_Trainer(EpochTrainerBase):
         with open(os.path.join(self.config.save_dir, f"test_metrics_ctoy.pkl"), "wb") as f:
             pickle.dump(test_metrics, f)
 
+        task_acc = test_metrics['accuracy']
         # print test metrics
         print("Test Metrics:")
         print(f"Loss: {test_metrics['loss']}")
@@ -371,6 +385,8 @@ class CY_Epoch_Trainer(EpochTrainerBase):
         self.logger.info(f"Fidelity: {test_metrics['fidelity']}")
         self.logger.info(f"Feature Importance: {test_metrics['feature_importance']}")
 
+        update_pickle_dict(self.acc_metrics_location, self.config.exper_name,
+                           self.config.run_id, 'task_acc', task_acc)
 
     def _save_selected_results(self, loader, expert, mode, arch, min_samples_leaf_for_gt=None):
         print(f"\n------------------- Metrics ({mode}) ---------------------")

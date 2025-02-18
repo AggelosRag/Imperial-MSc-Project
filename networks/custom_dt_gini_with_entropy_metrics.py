@@ -4,7 +4,9 @@ import os
 
 from scipy.stats import entropy
 from data_loaders import get_mnist_dataLoader_original
+from utils import precision_round
 from utils.tree_utils import get_light_colors
+
 
 class DecisionPath:
     def __init__(self, node_indices, feature_indices, node_indptr, feature_indptr):
@@ -14,13 +16,15 @@ class DecisionPath:
         self.feature_indptr = feature_indptr
 
 class CustomDecisionTree:
-    def __init__(self, n_classes, min_samples_split=2, min_samples_leaf=1, max_depth=1000):
+    def __init__(self, n_classes, min_samples_split=2, min_samples_leaf=1, max_depth=1000,
+                 precision_round=True):
         self.min_samples_split = min_samples_split
         self.min_samples_leaf = min_samples_leaf
         self.max_depth = max_depth
         self.tree = None
         self.node_count = 0
         self.n_classes = n_classes
+        self.precision_round = precision_round
 
     class Node:
         def __init__(self, gini, entropy, num_samples, num_samples_per_class,
@@ -90,9 +94,7 @@ class CustomDecisionTree:
                     node.left = self._grow_tree(X_left, y_left, depth + 1)
                     node.right = self._grow_tree(X_right, y_right, depth + 1)
                     if self._can_prune(node):
-                        if self._investigate_splits(X_left,
-                                                    y_left) and self._investigate_splits(
-                                X_right, y_right):
+                        if self._investigate_splits(X_left, y_left) and self._investigate_splits(X_right, y_right):
                             node.left = None
                             node.right = None
                             self.node_count = self.node_count - 2
@@ -144,12 +146,24 @@ class CustomDecisionTree:
                 gini_left = 1.0 - sum((num_left[x] / i) ** 2 for x in range(self.n_classes))
                 gini_right = 1.0 - sum((num_right[x] / (m - i)) ** 2 for x in range(self.n_classes))
                 gini = (i * gini_left + (m - i) * gini_right) / m
-                if thresholds[i] == thresholds[i - 1]:
+
+                # Check for precision issues and round accordingly
+                # threshold_current = precision_round(thresholds[i])
+                # threshold_previous = precision_round(thresholds[i - 1])
+                threshold_current = thresholds[i]
+                threshold_previous = thresholds[i - 1]
+
+                if threshold_current == threshold_previous:
                     continue
                 if gini < best_gini:
                     best_gini = gini
                     best_idx = idx
-                    best_thr = (thresholds[i] + thresholds[i - 1]) / 2
+                    # Round the threshold between two values
+                    if self.precision_round:
+                        best_thr = precision_round((threshold_current + threshold_previous) / 2)
+                    else:
+                        best_thr = (threshold_current + threshold_previous) / 2
+
         return best_idx, best_thr
 
     def _gini(self, y):
@@ -266,17 +280,16 @@ class CustomDecisionTree:
                 threshold = node.threshold
                 # Handle the special case for fixed splits
                 if threshold == 0.5:
-                    threshold_str = "<= 0.5"
+                    threshold_str = "== 0"
                     fillcolor = light_grey
+                    dot_data.append(
+                        f'{node_id} [label="samples = {node.num_samples}\\n{feature_names[node.feature_index]} {threshold_str}", fillcolor="{fillcolor}"] ;')
                 else:
                     threshold_str = f"<= {self._custom_print(threshold)}"
                     fillcolor = light_yellow
-
-                dot_data.append(
-                    f'{node_id} [label="{feature_names[node.feature_index]} {threshold_str}\\n'
-                    f'gini = {node.gini:.2f}\\nentropy = {node.entropy:.4f}\\nsamples = {node.num_samples}\\n'
-                    f'class = {class_names[node.predicted_class]}\\n'
-                    f'info gain = {node.info_gain:.4f}\\ngain ratio = {node.gain_ratio:.4f}", fillcolor="{fillcolor}"] ;')
+                    dot_data.append(
+                        f'{node_id} [label="{feature_names[node.feature_index]} {threshold_str}\\n'
+                        f'info gain = {node.info_gain:.4f}\\nsamples = {node.num_samples}\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
 
                 left_id = node_id * 2 + 1
                 right_id = node_id * 2 + 2
@@ -291,24 +304,24 @@ class CustomDecisionTree:
                 value_str = format_values(node.num_samples_per_class,
                                           class_names)
                 dot_data.append(
-                    f'{node_id} [label="gini = {node.gini:.2f}\\nentropy = {node.entropy:.4f}\\nsamples = {node.num_samples}\\n'
-                    f'{value_str}\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
+                    f'{node_id} [label="samples = {node.num_samples}\\n'
+                    f'{value_str}\\n\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
 
         add_node(self.tree, 0)
         dot_data.append("}")
         return "\n".join(dot_data)
 
     def _custom_print(self, number):
-        from decimal import Decimal, getcontext
-
-        # Set a high precision to handle very small numbers
-        getcontext().prec = 50
-
-        # Convert the number to a decimal
-        num = Decimal(number)
+        # from decimal import Decimal, getcontext
+        #
+        # # Set a high precision to handle very small numbers
+        # getcontext().prec = 50
+        #
+        # # Convert the number to a decimal
+        # num = Decimal(float(number))
 
         # Convert to string
-        num_str = format(num, 'f')
+        num_str = format(float(number), '.2f')
 
         # Split the string into the integer and decimal parts
         integer_part, decimal_part = num_str.split('.')
@@ -551,6 +564,38 @@ class CustomDecisionTree:
                 stack.append(node.left)
         return None
 
+    def traverse_and_sum_info_gain(self, node):
+        # Dictionary to store info gains per leaf node ID
+        info_gain_per_leaf = {}
+        total_info_gain = 0
+
+        # Helper function to recursively traverse the tree
+        def traverse(node, info_gains):
+            nonlocal total_info_gain
+            if node is None:
+                return
+
+            # If the threshold is not 0.5, add info gain to the path
+            if node.threshold != 0.5:
+                info_gains.append(node.info_gain)
+                total_info_gain += node.info_gain
+
+            # If it's a leaf node, store the path info in the dict with the node ID
+            if node.left is None and node.right is None:
+                info_gain_per_leaf[node.id] = list(info_gains)
+                return
+
+            # Recursively traverse the left and right children
+            if node.left is not None:
+                traverse(node.left, list(info_gains))
+            if node.right is not None:
+                traverse(node.right, list(info_gains))
+
+        # Start traversal from the root
+        traverse(node, [])
+
+        return total_info_gain, info_gain_per_leaf
+
     def export_decision_paths_with_subtree(self, decision_paths, feature_names,
                                            class_colors, class_names,
                                            output_dir="decision_paths",
@@ -586,14 +631,14 @@ class CustomDecisionTree:
                 if threshold == 0.5:
                     threshold_str = "== 0"
                     fillcolor = light_grey
+                    dot_data.append(
+                        f'{node_id} [label="samples = {node.num_samples}\\n{feature_names[node.feature_index]} {threshold_str}", fillcolor="{fillcolor}"] ;')
                 else:
                     threshold_str = f"<= {self._custom_print(threshold)}"
                     fillcolor = light_yellow
-
-                dot_data.append(
-                    f'{node_id} [label="{feature_names[node.feature_index]} {threshold_str}\\n'
-                    f'gini = {node.gini:.2f}\\nsamples = {node.num_samples}\\n'
-                    f'class = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
+                    dot_data.append(
+                        f'{node_id} [label="{feature_names[node.feature_index]} {threshold_str}\\n'
+                        f'info gain = {node.info_gain:.4f}\\nsamples = {node.num_samples}\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
 
                 left_id = node_id * 2 + 1
                 right_id = node_id * 2 + 2
@@ -608,8 +653,8 @@ class CustomDecisionTree:
                 value_str = format_values(node.num_samples_per_class,
                                           class_names)
                 dot_data.append(
-                    f'{node_id} [label="gini = {node.gini:.2f}\\nsamples = {node.num_samples}\\n'
-                    f'{value_str}\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
+                    f'{node_id} [label="samples = {node.num_samples}\\n'
+                    f'{value_str}\\n\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
 
         for i, node_id in enumerate(node_path):
             node = self._get_node_by_id(node_id)
@@ -636,9 +681,7 @@ class CustomDecisionTree:
                     threshold_str = f"<= {self._custom_print(threshold)}"
                     fillcolor = light_yellow
                 dot_data.append(
-                    f'{node_id} [label="{feature_names[node.feature_index]} {threshold_str}\\n'
-                    f'gini = {node.gini:.2f}\\nsamples = {node.num_samples}\\n'
-                    f'class = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
+                    f'{node_id} [label="samples = {node.num_samples}\\n{feature_names[node.feature_index]} {threshold_str}", fillcolor="{fillcolor}"] ;')
                 if i < len(node_path) - 1:
                     dot_data.append(f'{node_id} -> {next_node_id} ;')
             else:
@@ -648,8 +691,8 @@ class CustomDecisionTree:
                 value_str = format_values(node.num_samples_per_class,
                                           class_names)
                 dot_data.append(
-                    f'{node_id} [label="gini = {node.gini:.2f}\\nsamples = {node.num_samples}\\n'
-                    f'{value_str}\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
+                    f'{node_id} [label="samples = {node.num_samples}\\n'
+                    f'{value_str}\\n\\nclass = {class_names[node.predicted_class]}", fillcolor="{fillcolor}"] ;')
 
         # Add the subtree for the final node in the decision path
         final_node = self._get_node_by_id(node_path[-1])
@@ -891,7 +934,7 @@ class CustomDecisionTree:
         traverse(self.tree)
         return leaf_node_ids
 
-def build_combined_tree(original_tree, leaf_trees, X, y):
+def build_combined_tree_binary(original_tree, leaf_trees):
     """Construct a new tree where the leaves of the original tree are replaced with new trees."""
     original_tree_ = original_tree.tree
 
@@ -1097,7 +1140,7 @@ def example_usage():
     original_graph.render("dt_with_dts_custom_gini_entropy/original_tree", format='png', cleanup=True)
 
     # Build combined tree
-    combined_tree = build_combined_tree(clf, leaf_trees, X_train, y_train)
+    combined_tree = build_combined_tree_binary(clf, leaf_trees)
 
     # Export the combined tree to Graphviz format
     combined_dot_data = combined_tree.export_tree(

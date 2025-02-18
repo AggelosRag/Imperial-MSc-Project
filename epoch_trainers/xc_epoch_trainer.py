@@ -7,11 +7,12 @@ from sklearn.metrics import recall_score, precision_score
 from tqdm import tqdm
 import sys
 
-from loggers.joint_cbm_logger import JointCBMLogger
 from loggers.xc_logger import XCLogger
 
 from base.epoch_trainer_base import EpochTrainerBase
-from utils import column_get_correct
+from utils import column_get_correct, sigmoid_or_softmax_with_groups, \
+    identify_misclassified_samples, convert_to_categorical, update_pickle_dict, \
+    probs_to_binary
 
 
 class XC_Epoch_Trainer(EpochTrainerBase):
@@ -31,12 +32,13 @@ class XC_Epoch_Trainer(EpochTrainerBase):
         self.arch = arch
         self.lr_scheduler = arch.lr_scheduler
         self.model = arch.model.to(self.device)
-        self.criterion_per_concept = arch.criterion_per_concept
         self.criterion = arch.criterion_concept
         self.min_samples_leaf = config['regularisation']['min_samples_leaf']
-        self.num_concepts = config['dataset']['num_concepts']
+        self.concept_names = config['dataset']['concept_names']
+        self.n_concept_groups = len(list(self.concept_names.keys()))
 
         self.do_validation = self.val_loader is not None
+        self.acc_metrics_location = self.config.dir + "/accumulated_metrics.pkl"
 
         # Initialize the metrics tracker
         self.metrics_tracker = XCLogger(config, iteration=1,
@@ -49,11 +51,11 @@ class XC_Epoch_Trainer(EpochTrainerBase):
         print("Device: ", self.device)
 
         self.optimizer = arch.xc_optimizer
-        for state in self.optimizer.state.values():
-            for k, v in state.items():
-                if isinstance(v, torch.Tensor):
-                    state[k] = v.to(self.device)
-
+        if self.optimizer is not None:
+            for state in self.optimizer.state.values():
+                for k, v in state.items():
+                    if isinstance(v, torch.Tensor):
+                        state[k] = v.to(self.device)
 
     def _train_epoch(self, epoch):
 
@@ -66,7 +68,6 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                 batch_size = X_batch.size(0)
                 X_batch = X_batch.to(self.device)
                 C_batch = C_batch.to(self.device)
-                C_batch = C_batch[:, self.arch.selected_concepts]
 
                 # Forward pass
                 C_pred_soft = self.model.concept_predictor(X_batch)
@@ -76,18 +77,17 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                 self.metrics_tracker.track_total_train_correct_per_epoch_per_concept(
                     preds=C_pred_soft.detach().cpu(), labels=C_batch.detach().cpu()
                 )
-                C_pred = torch.sigmoid(C_pred_soft)
+                #C_pred = torch.sigmoid(C_pred_soft)
+                C_pred = sigmoid_or_softmax_with_groups(C_pred_soft, self.concept_names)
 
                 # Calculate Concept losses
-                loss_concept_total = self.criterion(C_pred, C_batch)
-                bce_loss_per_concept = self.criterion_per_concept(C_pred, C_batch)
-                bce_loss_per_concept = torch.mean(bce_loss_per_concept, dim=0)
+                loss_concept_total, loss_per_concept = self.criterion(C_pred, C_batch)
                 self.metrics_tracker.update_batch(update_dict_or_key='concept_loss',
                                                   value=loss_concept_total.detach().cpu().item(),
                                                   batch_size=batch_size,
                                                   mode='train')
                 self.metrics_tracker.update_batch(update_dict_or_key='loss_per_concept',
-                                                  value=list(bce_loss_per_concept.detach().cpu().numpy()),
+                                                  value=loss_per_concept,
                                                   batch_size=batch_size,
                                                   mode='train')
 
@@ -127,7 +127,6 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                     batch_size = X_batch.size(0)
                     X_batch = X_batch.to(self.device)
                     C_batch = C_batch.to(self.device)
-                    C_batch = C_batch[:, self.arch.selected_concepts]
 
                     # Forward pass
                     C_pred_soft = self.model.concept_predictor(X_batch)
@@ -137,12 +136,11 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                     self.metrics_tracker.track_total_val_correct_per_epoch_per_concept(
                         preds=C_pred_soft.detach().cpu(), labels=C_batch.detach().cpu()
                     )
-                    C_pred = torch.sigmoid(C_pred_soft)
+                    # C_pred = torch.sigmoid(C_pred_soft)
+                    C_pred = sigmoid_or_softmax_with_groups(C_pred_soft, self.concept_names)
 
                     # Calculate Concept losses
-                    loss_concept_total = self.criterion(C_pred, C_batch)
-                    bce_loss_per_concept = self.criterion_per_concept(C_pred, C_batch)
-                    bce_loss_per_concept = torch.mean(bce_loss_per_concept, dim=0)
+                    loss_concept_total, loss_per_concept = self.criterion(C_pred, C_batch)
                     self.metrics_tracker.update_batch(
                         update_dict_or_key='concept_loss',
                         value=loss_concept_total.detach().cpu().item(),
@@ -150,7 +148,7 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                         mode='val')
                     self.metrics_tracker.update_batch(
                         update_dict_or_key='loss_per_concept',
-                        value=list(bce_loss_per_concept.detach().cpu().numpy()),
+                        value=loss_per_concept,
                         batch_size=batch_size,
                         mode='val')
 
@@ -168,7 +166,7 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                         batch_id='{0}'.format(batch_idx + 1))
                     t.update()
 
-    def _test(self, test_data_loader, hard_cbm=False):
+    def _test(self, test_data_loader, hard_cbm=False, categorise=False):
 
         self.model.concept_predictor.eval()
         #tensor_X = torch.FloatTensor().to(self.device)
@@ -176,8 +174,8 @@ class XC_Epoch_Trainer(EpochTrainerBase):
         tensor_C = torch.FloatTensor().to(self.device)
         tensor_y = torch.LongTensor().to(self.device)
 
-        test_metrics = {"concept_loss": 0, "loss_per_concept": np.zeros(self.num_concepts), "total_correct": 0,
-                        "accuracy_per_concept": np.zeros(self.num_concepts)}
+        test_metrics = {"concept_loss": 0, "loss_per_concept": np.zeros(self.n_concept_groups), "total_correct": 0,
+                        "accuracy_per_concept": np.zeros(self.n_concept_groups)}
 
         if self.config["trainer"]["save_test_tensors"] is True:
             misclassified_examples = {}
@@ -197,47 +195,40 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                     C_pred = C_pred[:, self.arch.selected_concepts]
 
                     # Track number of corrects per concept
-                    correct_per_column = column_get_correct(C_pred, C_batch)
+                    correct_per_column = column_get_correct(C_pred, C_batch, self.concept_names)
                     correct_per_column = correct_per_column.detach().cpu().numpy()
                     test_metrics["accuracy_per_concept"] += np.array([x for x in correct_per_column])
 
-                    C_pred = torch.sigmoid(C_pred)
+                    samples = identify_misclassified_samples(C_pred, C_batch, self.concept_names)
+                    if self.config["trainer"]["save_test_tensors"] is True:
+                        for i in range(X_batch.shape[0]):
+                            if samples[i]:  # Check if any class is misclassified
+                                sample_idx = batch_idx * test_data_loader.batch_size + i
+                                misclassified_examples[sample_idx] = {
+                                    'X': X_batch[i].cpu().numpy(),
+                                    "C": C_batch[i].cpu().numpy(),
+                                    'C_pred': C_pred[i].cpu().numpy()
+                                }
+                            else:
+                                sample_idx = batch_idx * test_data_loader.batch_size + i
+                                correctly_classified_examples[sample_idx] = {
+                                    'X': X_batch[i].cpu().numpy(),
+                                    "C": C_batch[i].cpu().numpy(),
+                                    'C_pred': C_pred[i].cpu().numpy()
+                                }
+
+                    # C_pred = torch.sigmoid(C_pred_soft)
+                    C_pred = sigmoid_or_softmax_with_groups(C_pred, self.concept_names)
                     #tensor_X = torch.cat((tensor_X, X_batch), dim=0)
                     tensor_C_pred = torch.cat((tensor_C_pred, C_pred), dim=0)
                     tensor_y = torch.cat((tensor_y, y_batch), dim=0)
                     tensor_C = torch.cat((tensor_C, C_batch), dim=0)
 
                     # Calculate Concept losses
-                    loss_concept_total = self.criterion(C_pred, C_batch)
-                    bce_loss_per_concept = self.criterion_per_concept(C_pred, C_batch)
-                    bce_loss_per_concept = torch.mean(bce_loss_per_concept, dim=0).detach().cpu().numpy()
+                    loss_concept_total, loss_per_concept = self.criterion(C_pred, C_batch)
 
                     test_metrics["concept_loss"] += loss_concept_total.detach().cpu().item() * batch_size
-                    test_metrics["loss_per_concept"] += np.array([x * batch_size for x in bce_loss_per_concept])
-
-                    # Find misclassified examples in the current batch
-                    preds = C_pred
-                    preds_binary = (preds > 0.5).int()
-
-                    misclassified = (preds_binary != C_batch)
-                    all_concepts_correctly_classified = (preds_binary == C_batch)
-
-                    if self.config["trainer"]["save_test_tensors"] is True:
-                        for i in range(X_batch.shape[0]):
-                            if misclassified[i].any():  # Check if any class is misclassified
-                                sample_idx = batch_idx * test_data_loader.batch_size + i
-                                misclassified_examples[sample_idx] = {
-                                    'X': X_batch[i].cpu().numpy(),
-                                    "C": C_batch[i].cpu().numpy(),
-                                    'C_pred_w_sigmoid': preds[i].cpu().numpy()
-                                }
-                            elif all_concepts_correctly_classified[i].all():
-                                sample_idx = batch_idx * test_data_loader.batch_size + i
-                                correctly_classified_examples[sample_idx] = {
-                                    'X': X_batch[i].cpu().numpy(),
-                                    "C": C_batch[i].cpu().numpy(),
-                                    'C_pred_w_sigmoid': preds[i].cpu().numpy()
-                                }
+                    test_metrics["loss_per_concept"] += np.array([x * batch_size for x in loss_per_concept])
 
                     t.set_postfix(
                         batch_id='{0}'.format(batch_idx + 1))
@@ -276,41 +267,14 @@ class XC_Epoch_Trainer(EpochTrainerBase):
         self.logger.info(f"Concept Accuracy: {test_metrics['concept_accuracy']}")
         self.logger.info(f"Accuracy per Concept: {test_metrics['accuracy_per_concept']}")
 
+        # update pickle dict
+        update_pickle_dict(self.acc_metrics_location, self.config.exper_name,
+                           self.config.run_id, 'concept_acc',
+                           float(test_metrics['concept_accuracy']))
+
         # if we use a hard-cbm, convert the predictions to binary
         #tensor_C_pred = torch.sigmoid(tensor_C_pred)
-
-        tensor_C_pred_binarised = tensor_C_pred.clone()
-        tensor_C_pred_binarised[tensor_C_pred_binarised >= 0.5] = 1
-        tensor_C_pred_binarised[tensor_C_pred_binarised < 0.5] = 0
-
-        # Calculate precision and recall per column
-        precision_per_column = []
-        recall_per_column = []
-        all_labels = tensor_C.cpu().numpy()
-        all_preds = tensor_C_pred_binarised.cpu().numpy()
-
-        for i in range(all_labels.shape[1]):
-            precision = precision_score(all_labels[:, i], all_preds[:, i])
-            recall = recall_score(all_labels[:, i], all_preds[:, i])
-            precision_per_column.append(precision)
-            recall_per_column.append(recall)
-
-        # Calculate average precision and recall
-        avg_precision = np.mean(precision_per_column)
-        avg_recall = np.mean(recall_per_column)
-
-        test_metrics["precision"] = avg_precision
-        test_metrics["recall"] = avg_recall
-        test_metrics["precision_per_concept"] = precision_per_column
-        test_metrics["recall_per_concept"] = recall_per_column
-        print(f"Average Recall: {test_metrics['recall']}")
-        print(f"Average Precision: {test_metrics['precision']}")
-        print(f"Recall per Concept: {test_metrics['recall_per_concept']}")
-        print(f"Precision per Concept: {test_metrics['precision_per_concept']}")
-        self.logger.info(f"Average Recall: {test_metrics['recall']}")
-        self.logger.info(f"Average Precision: {test_metrics['precision']}")
-        self.logger.info(f"Recall per Concept: {test_metrics['recall_per_concept']}")
-        self.logger.info(f"Precision per Concept: {test_metrics['precision_per_concept']}")
+        tensor_C_pred_categorical = convert_to_categorical(tensor_C_pred.detach().cpu().numpy(), self.concept_names)
 
         # output_path = os.path.join(self.config.save_dir, "test_tensors")
         # if not os.path.exists(output_path):
@@ -326,11 +290,15 @@ class XC_Epoch_Trainer(EpochTrainerBase):
         # print(f"\nSaved test tensors in {output_path}")
 
         if hard_cbm:
-            tensor_C_pred = tensor_C_pred_binarised
+            if categorise:
+                tensor_C_pred = tensor_C_pred_categorical
+            else:
+                tensor_C_pred = probs_to_binary(tensor_C_pred.detach().cpu().numpy(), self.concept_names)
 
         return tensor_C_pred, tensor_y
 
-    def _predict(self, X=None, data_loader=None, use_data_loader=True):
+    def _predict(self, X=None, data_loader=None, use_data_loader=True,
+                 categorise=False, temperatures=None):
 
         if use_data_loader:
             assert data_loader is not None and X is None
@@ -361,13 +329,27 @@ class XC_Epoch_Trainer(EpochTrainerBase):
                         t.update()
 
             # if we use a hard-cbm, convert the predictions to binary
-            tensor_C_pred = torch.sigmoid(tensor_C_pred)
+            #tensor_C_pred = torch.sigmoid(tensor_C_pred)
+            tensor_C_pred = sigmoid_or_softmax_with_groups(tensor_C_pred, self.concept_names)
+            if categorise:
+                tensor_C_pred = convert_to_categorical(tensor_C_pred.detach().cpu().numpy(), self.concept_names)
+            else:
+                tensor_C_pred = tensor_C_pred.cpu().numpy()
             return tensor_C_pred, tensor_y
         else:
             X = X.to(self.device)
             with torch.no_grad():
                 C_pred = self.model.concept_predictor(X)
 
+            if temperatures is not None:
+                C_pred = temperatures(C_pred)
+                #C_pred = C_pred / temperatures
+
             C_pred = C_pred[:, self.arch.selected_concepts]
-            C_pred = torch.sigmoid(C_pred).cpu().numpy()
+            # C_pred = torch.sigmoid(C_pred).cpu().numpy()
+            C_pred = sigmoid_or_softmax_with_groups(C_pred, self.concept_names)
+            if categorise:
+                C_pred = convert_to_categorical(C_pred.detach().cpu().numpy(), self.concept_names)
+            else:
+                C_pred = C_pred.cpu().numpy()
             return C_pred

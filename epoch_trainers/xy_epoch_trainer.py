@@ -33,6 +33,7 @@ class XY_Epoch_Trainer(EpochTrainerBase):
         self.epochs = config['trainer']['epochs']
 
         self.do_validation = self.val_loader is not None
+        self.acc_metrics_location = self.config.dir + "/accumulated_metrics.pkl"
         # check if selective net is used
         if "selectivenet" in config.config.keys():
             self.selective_net = True

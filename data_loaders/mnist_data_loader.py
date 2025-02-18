@@ -2,8 +2,10 @@ import pickle
 
 import graphviz
 import numpy as np
+import pandas as pd
 import torch
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OneHotEncoder
 from sklearn.tree import DecisionTreeClassifier, export_graphviz
 from torch.utils.data import TensorDataset, DataLoader
 from torchvision import datasets, transforms
@@ -92,58 +94,13 @@ def get_mnist_dataLoader_original(data_dir='./datasets/parabola',
         digits_size += len(width[i])
 
     targets = np.array(targets)
+    C_categorical = np.apply_along_axis(lambda col: pd.qcut(col, q=3, labels=False), axis=0, arr=targets)
 
-    def assign_bins(data, bin_edges):
-        return np.digitize(data, bins=bin_edges, right=True)
-
-    # Convert bin numbers to one-hot encoded values
-    def one_hot_encode(bin_numbers, num_bins):
-        return np.eye(num_bins)[bin_numbers - 1]
-
-    bins_data_all = []
-    for i in range(targets.shape[1]):
-        # Combine the two lists
-        combined_data = list(targets[:, i])
-
-        # Sort the combined data
-        combined_sorted = np.sort(combined_data)
-
-        # Determine the number of data points per bin
-        num_bins = 4
-        bin_size = len(combined_sorted) // num_bins
-
-        # Calculate bin edges
-        bin_edges = [combined_sorted[i * bin_size] for i in
-                     range(1, num_bins)] + [
-                        combined_sorted[-1]]
-        bin_edges = [-np.inf] + bin_edges
-
-        # Assign bins to the original data lists
-        bins_data = assign_bins(targets[:, i], bin_edges)
-
-        # do one-hot encoding in the bins
-        bins_data = one_hot_encode(bins_data, num_bins)
-
-        # flatten the matrix
-        bins_data_all.append(bins_data)
-
-    # stack in the second dimension
-    C = np.stack(bins_data_all, axis=1).reshape(-1, 12)
+    # Fit and transform the matrix C to one-hot encoded format
+    encoder = OneHotEncoder(sparse_output=False)  # Set sparse_output to False to get a dense matrix
+    C = encoder.fit_transform(C_categorical)
 
     y = np.array([item for sublist in labels for item in sublist])
-
-    # Create synthetic dataset
-    np.random.seed(42)
-    num_classes = 3
-
-    # Creating continuous concept targets (e.g., 5 concepts)
-
-    # Standardize the data
-    # scaler_X = StandardScaler()
-    # scaler_C = StandardScaler()
-    #
-    # X = scaler_X.fit_transform(X)
-    # C = scaler_C.fit_transform(C)
 
     # Split the data
     X_train, X_val, C_train, C_val, y_train, y_val = train_test_split(X, C, y,
@@ -262,76 +219,34 @@ def get_mnist_dataLoader_full(data_dir='.', type='SGD', config=None, batch_size=
         digits_size += len(width[i])
 
     targets = np.array(targets)
+    C_categorical = np.apply_along_axis(lambda col: pd.qcut(col, q=3, labels=False), axis=0, arr=targets)
 
-    def assign_bins(data, bin_edges):
-        return np.digitize(data, bins=bin_edges, right=True)
-
-    # Convert bin numbers to one-hot encoded values
-    def one_hot_encode(bin_numbers, num_bins):
-        return np.eye(num_bins)[bin_numbers - 1]
-
-    bins_data_all = []
-    for i in range(targets.shape[1]):
-        # Combine the two lists
-        combined_data = list(targets[:, i])
-
-        # Sort the combined data
-        combined_sorted = np.sort(combined_data)
-
-        # Determine the number of data points per bin
-        num_bins = 4
-        bin_size = len(combined_sorted) // num_bins
-
-        # Calculate bin edges
-        bin_edges = [combined_sorted[i * bin_size] for i in
-                     range(1, num_bins)] + [
-                        combined_sorted[-1]]
-        bin_edges = [-np.inf] + bin_edges
-
-        # Assign bins to the original data lists
-        bins_data = assign_bins(targets[:, i], bin_edges)
-
-        # do one-hot encoding in the bins
-        bins_data = one_hot_encode(bins_data, num_bins)
-
-        # flatten the matrix
-        bins_data_all.append(bins_data)
-
-    # stack in the second dimension
-    C = np.stack(bins_data_all, axis=1).reshape(-1, 24)
+    # Fit and transform the matrix C to one-hot encoded format
+    encoder = OneHotEncoder(
+        sparse_output=False)  # Set sparse_output to False to get a dense matrix
+    C = encoder.fit_transform(C_categorical)
 
     y = np.array([item for sublist in labels for item in sublist])
 
-    # Create synthetic dataset
-    np.random.seed(42)
-
-    # Creating continuous concept targets (e.g., 5 concepts)
-
-    # Standardize the data
-    # scaler_X = StandardScaler()
-    # scaler_C = StandardScaler()
-    #
-    # X = scaler_X.fit_transform(X)
-    # C = scaler_C.fit_transform(C)
-
     # Split the data
-    X_train, X_val, C_train, C_val, y_train, y_val = train_test_split(X, C, y,
+    x_train, x_val, c_train, c_val, y_train, y_val = train_test_split(X, C, y,
                                                                       test_size=0.5,
                                                                       random_state=42)
-    X_val, X_test, C_val, C_test, y_val, y_test = train_test_split(X_val, C_val, y_val,
-                                                                      test_size=0.5,
-                                                                      random_state=42)
+    x_val, x_test, c_val, c_test, y_val, y_test = train_test_split(x_val, c_val,
+                                                                   y_val,
+                                                                   test_size=0.5,
+                                                                   random_state=42)
     # Convert to PyTorch tensors
-    X_train = torch.tensor(X_train, dtype=torch.float32)
-    C_train = torch.tensor(C_train, dtype=torch.float32)
+    X_train = torch.tensor(x_train, dtype=torch.float32)
+    C_train = torch.tensor(c_train, dtype=torch.float32)
     y_train = torch.tensor(y_train, dtype=torch.long)
 
-    X_val = torch.tensor(X_val, dtype=torch.float32)
-    C_val = torch.tensor(C_val, dtype=torch.float32)
+    X_val = torch.tensor(x_val, dtype=torch.float32)
+    C_val = torch.tensor(c_val, dtype=torch.float32)
     y_val = torch.tensor(y_val, dtype=torch.long)
 
-    X_test = torch.tensor(X_test, dtype=torch.float32)
-    C_test = torch.tensor(C_test, dtype=torch.float32)
+    X_test = torch.tensor(x_test, dtype=torch.float32)
+    C_test = torch.tensor(c_test, dtype=torch.float32)
     y_test = torch.tensor(y_test, dtype=torch.long)
 
     # plot a bar plot with the number of concepts equal to 1 per class
@@ -348,11 +263,11 @@ def get_mnist_dataLoader_full(data_dir='.', type='SGD', config=None, batch_size=
 
     if type == 'SGD':
         data_train_loader = DataLoader(dataset=train_dataset,
-                                      batch_size=batch_size,
-                                      shuffle=True)
+                                       batch_size=batch_size,
+                                       shuffle=True)
         data_val_loader = DataLoader(dataset=val_dataset,
-                                      batch_size=batch_size,
-                                      shuffle=False)
+                                     batch_size=batch_size,
+                                     shuffle=False)
         data_test_loader = DataLoader(dataset=test_dataset,
                                       batch_size=batch_size,
                                       shuffle=False)

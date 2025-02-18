@@ -1,6 +1,7 @@
 import os.path
 import time
 
+import pandas as pd
 from torch.utils.tensorboard import SummaryWriter
 
 from utils import *
@@ -465,7 +466,7 @@ class CYLogger:
         t_rjc = torch.masked_select(
             self.tensor_attributes_per_epoch["val_out_put_target"],
             selection_result.bool())
-        val_auroc, _ = utils.compute_AUC(gt=t_rjc, pred=proba[:, 1])
+        val_auroc, _ = util.compute_AUC(gt=t_rjc, pred=proba[:, 1])
         self.val_auroc = val_auroc
 
     def evaluate_coverage_stats(self, selection_threshold):

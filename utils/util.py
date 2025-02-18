@@ -1,9 +1,9 @@
 import json
 import logging.config
+import pickle
 
 import numpy as np
 import torch
-import pandas as pd
 from pathlib import Path
 from itertools import repeat
 from collections import OrderedDict
@@ -49,7 +49,7 @@ def prepare_device(n_gpu_use):
     return device, list_ids
 
 def get_correct(y_hat, y, num_classes):
-    if num_classes == 2:
+    if y_hat.shape[1] == 1:
         y_hat = torch.sigmoid(y_hat)
         y_hat = [1 if y_hat[i] >= 0.5 else 0 for i in range(len(y_hat))]
         correct = [1 if y_hat[i] == y[i] else 0 for i in range(len(y_hat))]
@@ -71,7 +71,7 @@ def correct_predictions_per_class(logits, true_labels, num_classes,
     Returns:
     list: A list containing the number of correct predictions for each class.
     """
-    if num_classes == 2:
+    if logits.shape[1] == 1:
         # Binary classification case
         probabilities = torch.sigmoid(logits)
         predicted_classes = torch.where(probabilities >= threshold, 1, 0)
@@ -90,26 +90,35 @@ def correct_predictions_per_class(logits, true_labels, num_classes,
 
     return correct_counts
 
-def column_get_correct(logits, labels, threshold=0.5):
+def column_get_correct(logits, labels, my_dict, threshold=0.5):
     """
-    Calculate accuracy per column for predicted logits.
+    Calculate accuracy per column for predicted logits using categorical conversion.
 
     Parameters:
     logits (torch.Tensor): A tensor of predicted logits (shape: [batch_size, num_labels]).
     labels (torch.Tensor): A tensor of true labels (shape: [batch_size, num_labels]).
+    my_dict (dict): A dictionary where keys represent group names and values are lists
+                    of category names.
     threshold (float): Threshold to convert logits to binary predictions.
 
     Returns:
-    torch.Tensor: A tensor containing the accuracy for each column.
+    torch.Tensor: A tensor containing the number of correct predictions for each column.
     """
-    # Apply sigmoid to logits to get probabilities
-    probabilities = torch.sigmoid(logits)
 
-    # Convert probabilities to binary predictions based on the threshold
-    predictions = (probabilities >= threshold).float()
+    # Convert logits and labels to numpy for conversion
+    logits_np = logits.detach().cpu().numpy()
+    labels_np = labels.detach().cpu().numpy()
+
+    # Convert logits and labels to categorical values
+    logits_categorical = convert_to_categorical(logits_np, my_dict)
+    labels_categorical = onehot_to_categorical(labels_np, my_dict)
+
+    # Convert back to torch tensors
+    logits_categorical = torch.tensor(logits_categorical, dtype=torch.int64)
+    labels_categorical = torch.tensor(labels_categorical, dtype=torch.int64)
 
     # Calculate accuracy per column
-    correct_predictions = (predictions == labels).float()
+    correct_predictions = (logits_categorical == labels_categorical).float()
     correct_predictions = correct_predictions.sum(dim=0)
 
     return correct_predictions
@@ -214,3 +223,335 @@ def compute_class_weights(
                 [attribute_count[0]/attribute_count[1]]
             )
     return task_class_weights
+
+
+def create_group_indices(concept_groups, squeeze_double=True):
+    """
+    Create a mapping from concept group names to indices.
+
+    Parameters:
+    - concept_groups (dict): A dictionary of concept groups.
+
+    Returns:
+    - group_indices (dict): A dictionary mapping group names to their concept indices.
+    """
+    group_indices = {}
+    current_index = 0
+    current_group_index = 0
+
+    for group_name, concepts in concept_groups.items():
+        num_concepts = len(concepts)
+        if num_concepts == 2 and squeeze_double:
+            group_indices[current_group_index] = [current_index]
+            current_index += 1
+        elif num_concepts == 2 and squeeze_double == False:
+            group_indices[current_group_index] = [current_index, current_index]
+            current_index += 1
+        else:
+            group_indices[current_group_index] = list(range(current_index, current_index + num_concepts))
+            current_index += num_concepts
+        current_group_index += 1
+
+    return group_indices
+
+def convert_to_index_name_mapping(my_dict):
+    feature_value_names = {}
+
+    # Iterate over the dictionary with an index
+    for idx, (key, values) in enumerate(my_dict.items()):
+        # Create a nested dictionary where the inner values are indexed
+        feature_value_names[idx] = {i: value for i, value in enumerate(values)}
+
+    return feature_value_names
+
+
+def flatten_dict_to_list(my_dict):
+    flattened_list = []
+
+    # Iterate over the dictionary
+    for key, values in my_dict.items():
+        # Create the flattened elements with the key as prefix
+        for value in values:
+            if len(values) == 2:
+                flattened_list.append(f"{key}")
+            else:
+                flattened_list.append(f"{key}::{value}")
+
+    return flattened_list
+
+def convert_to_categorical(matrix, my_dict):
+    """
+    Reverses a probabilistic-encoded matrix back to its original categorical values,
+    where each group of columns may have a different number of probabilistic columns.
+
+    Parameters:
+    - matrix (numpy.ndarray): The probabilistic-encoded matrix.
+    - my_dict (dict): A dictionary where keys represent group names and values are lists
+                      of category names.
+
+    Returns:
+    - numpy.ndarray: The matrix of original categorical values.
+    """
+
+    # Calculate the number of original columns
+    n_original_cols = len(my_dict)
+
+    # Initialize the reversed matrix
+    reversed_matrix = np.zeros((matrix.shape[0], n_original_cols), dtype=int)
+
+    # Initialize the start index for each group's columns in the encoded matrix
+    start_index = 0
+
+    # Iterate over each group in the dictionary
+    for col_idx, (group, categories) in enumerate(my_dict.items()):
+        # Number of columns for this group
+        q = len(categories)
+
+        if q == 2:
+            offset = 1
+            # If there's only one element, apply sigmoid to the whole group at once
+            sigmoid_values = 1 / (1 + np.exp(-matrix[:, start_index]))
+            reversed_matrix[:, col_idx] = (sigmoid_values >= 0.5).astype(int)
+        elif q == 1:
+            # Raise an error if there are exactly two categories
+            raise ValueError(f"Group '{group}' has 1 category, which is not supported.")
+        else:
+            offset = q
+            # Otherwise, take the argmax across the group for each row
+            reversed_matrix[:, col_idx] = np.argmax(matrix[:, start_index:start_index + q], axis=1)
+
+        # Update the start index for the next group's columns
+        start_index += offset
+
+    return reversed_matrix
+
+def onehot_to_categorical(matrix, my_dict):
+    """
+    Converts one-hot encoded matrix back to its original categorical values.
+    When q > 3, it takes the argmax to get the categorical value.
+    When q = 1, it leaves the input as it is (returns the binary value as is).
+
+    Parameters:
+    - matrix (numpy.ndarray): The one-hot encoded matrix.
+    - my_dict (dict): A dictionary where keys represent group names and values are lists
+                      of category names.
+
+    Returns:
+    - numpy.ndarray: The matrix of original categorical values.
+    """
+
+    # Calculate the number of original columns
+    n_original_cols = len(my_dict)
+
+    # Initialize the reversed matrix
+    reversed_matrix = np.zeros((matrix.shape[0], n_original_cols), dtype=int)
+
+    # Initialize the start index for each group's columns in the encoded matrix
+    start_index = 0
+
+    # Iterate over each group in the dictionary
+    for col_idx, (group, categories) in enumerate(my_dict.items()):
+        # Number of columns for this group
+        q = len(categories)
+
+        if q == 2:
+            offset = 1
+            # If there's only one category, simply take the value as is (0 or 1)
+            reversed_matrix[:, col_idx] = matrix[:, start_index].astype(int)
+        elif q == 1:
+            # Raise an error if there are exactly two categories
+            raise ValueError(f"Group '{group}' has 1 category, which is not supported.")
+        else:
+            offset = q
+            # Otherwise, take the argmax across the group for each row if q > 3
+            reversed_matrix[:, col_idx] = np.argmax(matrix[:, start_index:start_index + q], axis=1)
+
+        # Update the start index for the next group's columns
+        start_index += offset
+
+    return reversed_matrix
+
+def sigmoid_or_softmax_with_groups(logits, my_dict):
+    """
+    Applies softmax or sigmoid to each group of logits based on the number of categories specified in my_dict.
+
+    Parameters:
+    - logits (torch.Tensor): The input tensor with logits. Shape: (batch_size, total_categories).
+    - my_dict (dict): A dictionary defining groups and the number of categories for each group.
+
+    Returns:
+    - torch.Tensor: The tensor with softmax or sigmoid applied to each group of logits.
+    """
+    # Initialize the list to store results for each group
+    result = []
+
+    # Keep track of the current index in the logits tensor
+    current_index = 0
+
+    # Apply appropriate activation for each group in my_dict
+    for group, categories in my_dict.items():
+        num_categories = len(categories)
+
+        # Apply activation based on the number of categories
+        if num_categories == 2:
+            # Slice the logits tensor for this group
+            offset = 1
+            group_logits = logits[:, current_index:current_index + 1]
+            # Apply sigmoid for a single category
+            group_result = torch.sigmoid(group_logits)
+        elif num_categories == 1:
+            # Raise an error if there are exactly two categories
+            raise ValueError(f"Group '{group}' has 1 category, which is not supported.")
+        else:
+            offset = num_categories
+            # Slice the logits tensor for this group
+            group_logits = logits[:, current_index:current_index + num_categories]
+            # Apply softmax for more than two categories
+            group_result = torch.softmax(group_logits, dim=1)
+
+        result.append(group_result)
+
+        # Update the index for the next group
+        current_index += offset
+
+    # Concatenate all results to get the final matrix
+    result = torch.cat(result, dim=1)
+
+    return result
+
+def probs_to_binary(matrix, my_dict):
+    """
+    Converts a matrix of probabilities to binary format.
+    - If q = 1, apply a threshold of 0.5 to the probabilities (assumed already sigmoid).
+    - If q >= 3, use argmax to set "1" at the max position and "0" at the others.
+
+    Parameters:
+    - matrix (numpy.ndarray): The probabilistic matrix.
+    - my_dict (dict): A dictionary where keys represent group names and values are lists
+                      of category names.
+
+    Returns:
+    - numpy.ndarray: A binary matrix (same shape as input matrix) where values are 0 or 1.
+    """
+
+    # Initialize the binary matrix with the same shape as the input matrix
+    binary_matrix = np.zeros_like(matrix, dtype=int)
+
+    # Initialize the start index for each group's columns in the encoded matrix
+    start_index = 0
+
+    # Iterate over each group in the dictionary
+    for col_idx, (group, categories) in enumerate(my_dict.items()):
+        # Number of columns for this group
+        q = len(categories)
+
+        if q == 2:
+            # If q == 2, apply threshold at 0.5 directly (values are assumed to already be sigmoid)
+            offset = 1
+            binary_matrix[:, start_index] = (matrix[:, start_index] >= 0.5).astype(int)
+        elif q >= 3:
+            offset = q
+            # If q >= 3, use argmax to set "1" at the max position and "0" at others
+            argmax_indices = np.argmax(matrix[:, start_index:start_index + q], axis=1)
+            # Set "1" at the position of the argmax for each row
+            binary_matrix[np.arange(matrix.shape[0]), start_index + argmax_indices] = 1
+        elif q == 1:
+            # Raise an error if there are exactly two categories
+            raise ValueError(f"Group '{group}' has 1 category, which is not supported.")
+
+        # Update the start index for the next group's columns
+        start_index += offset
+
+    return binary_matrix
+
+def identify_misclassified_samples(logits, labels, my_dict, threshold=0.5):
+    """
+    Identify samples where any concept is misclassified.
+
+    Parameters:
+    logits (torch.Tensor): A tensor of predicted logits (shape: [batch_size, num_labels]).
+    labels (torch.Tensor): A tensor of true labels (shape: [batch_size, num_labels]).
+    my_dict (dict): A dictionary where keys represent group names and values are lists
+                    of category names.
+    threshold (float): Threshold to convert logits to binary predictions.
+
+    Returns:
+    torch.Tensor: A boolean tensor indicating `True` for samples with any misclassified concept, `False` otherwise.
+    """
+
+    # Convert logits and labels to numpy for conversion
+    logits_np = logits.detach().cpu().numpy()
+    labels_np = labels.detach().cpu().numpy()
+
+    # Convert logits and labels to categorical values
+    logits_categorical = convert_to_categorical(logits_np, my_dict)
+    labels_categorical = onehot_to_categorical(labels_np, my_dict)
+
+    # Convert back to torch tensors
+    logits_categorical = torch.tensor(logits_categorical, dtype=torch.int64)
+    labels_categorical = torch.tensor(labels_categorical, dtype=torch.int64)
+
+    # Calculate a boolean mask for misclassification per sample
+    misclassified = (logits_categorical != labels_categorical).any(dim=1)
+
+    return misclassified
+
+def round_to_nearest_steps(array):
+    # Shift values down by 0.05
+    shifted_array = array - 0.05
+    # Scale by 10
+    scaled_array = shifted_array * 10
+    # Round to the nearest integer
+    rounded_array = np.round(scaled_array)
+    # Rescale back and shift back up by 0.05, then round to two decimal places
+    result = np.round(rounded_array / 10 + 0.05, 2)
+    return result
+
+def precision_round(value, tol=1e-5):
+    """Round values that have floating-point precision issues around .9999 or .00000."""
+    if isinstance(value, np.floating):
+        value = value.item()  # Convert NumPy float to Python float
+
+    decimal_part = value - np.floor(value)  # Get the decimal part
+    rounded_value = round(value, 6)  # Round to a set precision (6 decimal places)
+
+    # Handle cases like 0.6999999 or 0.80000004
+    if abs(value - rounded_value) < tol:  # If the value is close to its rounded version
+        return rounded_value
+    return value  # Otherwise, return the original value
+
+
+def update_pickle_dict(pickle_file, exper_name, run_id, new_key, new_value):
+    """
+    Opens a pickled dictionary, adds a new key-value pair, and re-saves the dictionary.
+    If the pickle file does not exist, it creates a new one.
+
+    Args:
+    - pickle_file (str): The path to the pickle file.
+    - new_key: The key to be added to the dictionary.
+    - new_value: The value associated with the new key.
+    :param run_id:
+    """
+    try:
+        # Try to open the pickle file and load the dictionary
+        with open(pickle_file, 'rb') as file:
+            my_dict = pickle.load(file)
+    except FileNotFoundError:
+        # If the file does not exist, create a new dictionary
+        print(f"{pickle_file} not found. Creating a new dictionary.")
+        my_dict = {}
+
+    # Add the new key-value pair to the dictionary
+    if exper_name not in my_dict:
+        my_dict[exper_name] = {}
+
+    if run_id not in my_dict[exper_name]:
+        my_dict[exper_name][run_id] = {}
+
+    my_dict[exper_name][run_id][new_key] = new_value
+
+    # Save the updated or newly created dictionary back into the pickle file
+    with open(pickle_file, 'wb') as file:
+        pickle.dump(my_dict, file)
+    print(f"Updated dictionary saved to {pickle_file}")
+

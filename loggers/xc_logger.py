@@ -1,10 +1,10 @@
 import os.path
 import time
 
+import pandas as pd
 from torch.utils.tensorboard import SummaryWriter
 
 from utils import *
-import utils
 
 
 class XCLogger:
@@ -23,8 +23,9 @@ class XCLogger:
         self.best_epoch_id = 0
 
         self.n_classes = config['dataset']['num_classes']
-        self.n_concepts = config['dataset']['num_concepts']
         self.concept_names = config['dataset']['concept_names']
+        self.concept_group_names = list(self.concept_names.keys())
+        self.n_concept_groups = len(list(self.concept_names.keys()))
 
         self.run_id = 0
         self.run_data = []
@@ -48,10 +49,10 @@ class XCLogger:
         self.val_accuracy = None
 
         self.list_attributes_per_epoch = {
-            "train_loss_per_concept": np.zeros(self.n_concepts),
-            "val_loss_per_concept": np.zeros(self.n_concepts),
-            "train_accuracy_per_concept": np.zeros(self.n_concepts),
-            "val_accuracy_per_concept": np.zeros(self.n_concepts),
+            "train_loss_per_concept": np.zeros(self.n_concept_groups),
+            "val_loss_per_concept": np.zeros(self.n_concept_groups),
+            "train_accuracy_per_concept": np.zeros(self.n_concept_groups),
+            "val_accuracy_per_concept": np.zeros(self.n_concept_groups),
         }
 
         self.all_epoch_attributes = {key: [] for key in
@@ -65,9 +66,6 @@ class XCLogger:
     def begin_run(self):
         """
         Records all the parameters at the start of each run.
-
-        :param run:
-
         :return: none
         """
         self.run_start_time = time.time()
@@ -167,17 +165,17 @@ class XCLogger:
         self.tb.add_scalar("XC_Logger/Val Accuracy",
                            self.val_accuracy, self.epoch_id)
         # report concept losses and concept accuracies
-        for i in range(self.n_concepts):
-            self.tb.add_scalar(f"XC_Logger Train Loss Per Concept/Train Loss Concept {self.concept_names[i]}",
+        for i in range(self.n_concept_groups):
+            self.tb.add_scalar(f"XC_Logger Train Loss Per Concept/Train Loss Concept {self.concept_group_names[i]}",
                                self.list_attributes_per_epoch['train_loss_per_concept'][i],
                                self.epoch_id)
-            self.tb.add_scalar(f"XC_Logger Val Loss Per Concept/Val Loss Concept {self.concept_names[i]}",
+            self.tb.add_scalar(f"XC_Logger Val Loss Per Concept/Val Loss Concept {self.concept_group_names[i]}",
                                self.list_attributes_per_epoch['val_loss_per_concept'][i],
                                self.epoch_id)
-            self.tb.add_scalar(f"XC_Logger Train Accuracy Per Concept/Train Accuracy Concept {self.concept_names[i]}",
+            self.tb.add_scalar(f"XC_Logger Train Accuracy Per Concept/Train Accuracy Concept {self.concept_group_names[i]}",
                                self.list_attributes_per_epoch['train_accuracy_per_concept'][i],
                                self.epoch_id)
-            self.tb.add_scalar(f"XC_Logger Val Accuracy Per Concept/Val Accuracy Concept {self.concept_names[i]}",
+            self.tb.add_scalar(f"XC_Logger Val Accuracy Per Concept/Val Accuracy Concept {self.concept_group_names[i]}",
                                self.list_attributes_per_epoch['val_accuracy_per_concept'][i],
                                self.epoch_id)
 
@@ -194,7 +192,7 @@ class XCLogger:
 
         :return: the totalcorrect prediction at the each iteration of batch
         """
-        correct_per_column = column_get_correct(preds, labels)
+        correct_per_column = column_get_correct(preds, labels, self.concept_names)
         self.list_attributes_per_epoch["train_accuracy_per_concept"] += np.array(
             [x for x in correct_per_column])
 
@@ -207,7 +205,7 @@ class XCLogger:
 
         :return: the totalcorrect prediction at the each iteration of batch
         """
-        correct_per_column = column_get_correct(preds, labels)
+        correct_per_column = column_get_correct(preds, labels, self.concept_names)
         self.list_attributes_per_epoch["val_accuracy_per_concept"] += np.array(
             [x for x in correct_per_column])
 

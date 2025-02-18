@@ -1,6 +1,7 @@
 import os.path
 import time
 
+import pandas as pd
 from torch.utils.tensorboard import SummaryWriter
 
 from utils import *
@@ -31,6 +32,8 @@ class JointCBMLogger:
         self.n_concepts = config['dataset']['num_concepts']
         self.class_names = config['dataset']['class_names']
         self.concept_names = config['dataset']['concept_names']
+        self.concept_group_names = list(self.concept_names.keys())
+        self.n_concept_groups = len(list(self.concept_names.keys()))
 
         if isinstance(train_loader.dataset, torch.utils.data.TensorDataset):
             y_all_train = self.train_loader.dataset[:][2]
@@ -126,12 +129,12 @@ class JointCBMLogger:
             }
 
         self.list_attributes_per_epoch = {
-            "train_loss_per_concept": np.zeros(self.n_concepts),
-            "val_loss_per_concept": np.zeros(self.n_concepts),
-            "train_accuracy_per_concept": np.zeros(self.n_concepts),
-            "val_accuracy_per_concept": np.zeros(self.n_concepts),
-            "train_feature_importance": np.zeros(self.n_concepts),
-            "val_feature_importance": np.zeros(self.n_concepts),
+            "train_loss_per_concept": np.zeros(self.n_concept_groups),
+            "val_loss_per_concept": np.zeros(self.n_concept_groups),
+            "train_accuracy_per_concept": np.zeros(self.n_concept_groups),
+            "val_accuracy_per_concept": np.zeros(self.n_concept_groups),
+            "train_feature_importance": np.zeros(self.n_concept_groups),
+            "val_feature_importance": np.zeros(self.n_concept_groups),
         }
         self.train_accuracy_per_class = np.zeros(self.n_classes)
         self.val_accuracy_per_class = np.zeros(self.n_classes)
@@ -283,17 +286,17 @@ class JointCBMLogger:
         self.tb.add_scalar("XC_Logger/Val Concept Accuracy",
                            self.val_concept_accuracy, self.epoch_id)
         # report concept losses and concept accuracies
-        for i in range(self.n_concepts):
-            self.tb.add_scalar(f"XC_Logger Train Loss Per Concept/Train Loss Concept {self.concept_names[i]}",
+        for i in range(self.n_concept_groups):
+            self.tb.add_scalar(f"XC_Logger Train Loss Per Concept/Train Loss Concept {self.concept_group_names[i]}",
                                self.list_attributes_per_epoch['train_loss_per_concept'][i],
                                self.epoch_id)
-            self.tb.add_scalar(f"XC_Logger Val Loss Per Concept/Val Loss Concept {self.concept_names[i]}",
+            self.tb.add_scalar(f"XC_Logger Val Loss Per Concept/Val Loss Concept {self.concept_group_names[i]}",
                                self.list_attributes_per_epoch['val_loss_per_concept'][i],
                                self.epoch_id)
-            self.tb.add_scalar(f"XC_Logger Train Accuracy Per Concept/Train Accuracy Concept {self.concept_names[i]}",
+            self.tb.add_scalar(f"XC_Logger Train Accuracy Per Concept/Train Accuracy Concept {self.concept_group_names[i]}",
                                self.list_attributes_per_epoch['train_accuracy_per_concept'][i],
                                self.epoch_id)
-            self.tb.add_scalar(f"XC_Logger Val Accuracy Per Concept/Val Accuracy Concept {self.concept_names[i]}",
+            self.tb.add_scalar(f"XC_Logger Val Accuracy Per Concept/Val Accuracy Concept {self.concept_group_names[i]}",
                                self.list_attributes_per_epoch['val_accuracy_per_concept'][i],
                                self.epoch_id)
 
@@ -441,7 +444,7 @@ class JointCBMLogger:
         h_rjc = torch.masked_select(self.tensor_attributes_per_epoch["val_out_put_class"], sel.bool()).view(-1, 2)
         proba = torch.nn.Softmax()(h_rjc)
         t_rjc = torch.masked_select(self.tensor_attributes_per_epoch["val_out_put_target"], selection_result.bool())
-        val_auroc, _ = utils.compute_AUC(gt=t_rjc, pred=proba[:, 1])
+        val_auroc, _ = util.compute_AUC(gt=t_rjc, pred=proba[:, 1])
         self.val_auroc = val_auroc
 
     def evaluate_coverage_stats(self, selection_threshold):
@@ -554,7 +557,7 @@ class JointCBMLogger:
 
         :return: the totalcorrect prediction at the each iteration of batch
         """
-        correct_per_column = column_get_correct(preds, labels)
+        correct_per_column = column_get_correct(preds, labels, self.concept_names)
         self.list_attributes_per_epoch["train_accuracy_per_concept"] += np.array(
             [x for x in correct_per_column])
 
@@ -567,7 +570,7 @@ class JointCBMLogger:
 
         :return: the totalcorrect prediction at the each iteration of batch
         """
-        correct_per_column = column_get_correct(preds, labels)
+        correct_per_column = column_get_correct(preds, labels, self.concept_names)
         self.list_attributes_per_epoch["val_accuracy_per_concept"] += np.array(
             [x for x in correct_per_column])
 

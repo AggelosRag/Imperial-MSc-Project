@@ -2,8 +2,7 @@ import argparse
 import collections
 import torch
 import numpy as np
-from trainers.leakage_inspection_general_case import perform_leakage_visualization
-from utils.parse_config import ConfigParser, _update_config
+from utils.parse_config import ConfigParser
 from utils import prepare_device
 import importlib
 
@@ -35,15 +34,6 @@ def main(config):
     logger.info("\n")
     logger.info(arch.model)
 
-    if 'explainer' in config.config.keys():
-        perform_leakage_visualization(data_loader, arch, config)
-        return 0
-    # get function handles of loss and metrics
-    # criterion = getattr(module_loss, config['loss'])
-    # metrics = [getattr(module_metric, met) for met in config['metrics']]
-    #metrics = config['metrics']
-    reg = config['regularisation']["type"]
-
     # build optimizer, learning rate scheduler. delete every lines containing lr_scheduler for disabling scheduler
     # trainable_params = filter(lambda p: p.requires_grad, model.parameters())
     # optimizer = config.init_obj('optimizer', torch.optim, trainable_params)
@@ -55,8 +45,8 @@ def main(config):
                               config=config,
                               device=device,
                               data_loader=data_loader,
-                              valid_data_loader=valid_data_loader,
-                              reg=reg)
+                              valid_data_loader=valid_data_loader
+                              )
 
     trainer.train()
     print("\nTraining completed")
@@ -66,6 +56,8 @@ def main(config):
 
     if config["trainer"]['type'] == 'IndependentCBMTrainer':
         hard_cbm = config["trainer"]['hard_cbm']
+        if isinstance(hard_cbm, int):
+            hard_cbm = bool(hard_cbm)
     else:
         hard_cbm = False
 
@@ -88,8 +80,22 @@ if __name__ == '__main__':
     # custom cli options to modify configuration from default values given in json file.
     CustomArgs = collections.namedtuple('CustomArgs', 'flags type target')
     options = [
-        CustomArgs(['--lr', '--learning_rate'], type=float, target='optimizer;args;lr'),
-        CustomArgs(['--bs', '--batch_size'], type=int, target='data_loader;args;batch_size')
+        CustomArgs(['--n', '--name'], type=str, target='name'),
+        CustomArgs(['--sd', '--save_dir'], type=str, target='trainer;save_dir'),
+        CustomArgs(['--pretrained_concept_predictor'],
+                     type=str, target='model;pretrained_concept_predictor'),
+        CustomArgs(['--pretrained_concept_predictor_joint'],
+                   type=str, target='model;pretrained_concept_predictor_joint'),
+        CustomArgs(['--msl', '--min_samples_leaf'],
+                   type=int, target='regularisation;min_samples_leaf'),
+        CustomArgs(['--entropy_layer', '--entropy_layer'],
+                     type=str, target='model;entropy_layer'),
+        CustomArgs(['--tau', '--tau'],
+                   type=float, target='model;tau'),
+        CustomArgs(['--lm', '--lm'],
+                   type=float, target='model;lm'),
+        CustomArgs(['--hard_cbm', '--hard_cbm'],
+                   type=int, target='trainer;hard_cbm'),
     ]
     config = ConfigParser.from_args(args, options)
     main(config)

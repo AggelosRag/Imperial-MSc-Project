@@ -10,7 +10,8 @@ from tqdm import tqdm
 from loggers.joint_cbm_logger import JointCBMLogger
 
 from base.epoch_trainer_base import EpochTrainerBase
-from utils import compute_AUC, column_get_correct, get_correct
+from utils import compute_AUC, column_get_correct, get_correct, \
+    sigmoid_or_softmax_with_groups
 from utils.tree_utils import prune_tree
 
 
@@ -34,20 +35,16 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
         self.model = arch.model.to(self.device)
         self.alpha = config['model']['alpha']
         self.criterion_concept = arch.criterion_concept
-        self.criterion_per_concept = arch.criterion_per_concept
         self.criterion_label = arch.criterion_label
         self.num_concepts = config['dataset']['num_concepts']
         self.min_samples_leaf = config['regularisation']['min_samples_leaf']
         self.epochs = config['trainer']['epochs']
+        self.concept_names = config['dataset']['concept_names']
+        self.n_concept_groups = len(list(self.concept_names.keys()))
         self.iteration = iteration
-        print("Device: ", self.device)
 
         self.do_validation = self.val_loader is not None
-        self.hard_concepts = self.arch.hard_concepts
-        self.soft_concepts = [i for i in range(self.num_concepts) if i not in self.hard_concepts]
-
-        combined_indices = self.hard_concepts + self.soft_concepts
-        self.sorted_concept_indices = torch.argsort(torch.tensor(combined_indices))
+        self.acc_metrics_location = self.config.dir + "/accumulated_metrics.pkl"
 
         # check if selective net is used
         if "selectivenet" in config.config.keys():
@@ -89,14 +86,9 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
         with tqdm(total=len(self.train_loader), file=sys.stdout) as t:
             for batch_idx, (X_batch, C_batch, y_batch) in enumerate(self.train_loader):
 
-                C_hard = C_batch[:, self.hard_concepts]
-
                 batch_size = X_batch.size(0)
                 X_batch = X_batch.to(self.device)
-                C_hard = C_hard.to(self.device)
                 C_batch = C_batch.to(self.device)
-                C_batch = C_batch[:, self.arch.selected_concepts]
-
                 y_batch = y_batch.to(self.device)
 
                 # Forward pass
@@ -107,9 +99,8 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                 self.metrics_tracker.track_total_train_correct_per_epoch_per_concept(
                     preds=C_pred_soft.detach().cpu(), labels=C_batch.detach().cpu()
                 )
-                C_pred_soft = torch.sigmoid(C_pred_soft)
-                C_pred_concat = torch.cat((C_hard, C_pred_soft), dim=1)
-                C_pred = C_pred_concat[:, self.sorted_concept_indices]
+                # C_pred_soft = torch.sigmoid(C_pred_soft)
+                C_pred = sigmoid_or_softmax_with_groups(C_pred_soft, self.concept_names)
                 tensor_C_pred = torch.cat((tensor_C_pred, C_pred), dim=0)
                 y_pred = self.model.label_predictor(C_pred)
                 tensor_y_pred = torch.cat((tensor_y_pred, y_pred), dim=0)
@@ -121,15 +112,13 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                     outputs = {"prediction_out": y_pred, "selection_out": out_selector, "out_aux": out_aux}
 
                 # Calculate Concept losses
-                loss_concept_total = self.criterion_concept(C_pred, C_batch)
-                bce_loss_per_concept = self.criterion_per_concept(C_pred, C_batch)
-                bce_loss_per_concept = torch.mean(bce_loss_per_concept, dim=0)
+                loss_concept_total, loss_per_concept  = self.criterion_concept(C_pred, C_batch)
                 self.metrics_tracker.update_batch(update_dict_or_key='concept_loss',
                                                   value=loss_concept_total.detach().cpu().item(),
                                                   batch_size=batch_size,
                                                   mode='train')
                 self.metrics_tracker.update_batch(update_dict_or_key='loss_per_concept',
-                                                  value=list(bce_loss_per_concept.detach().cpu().numpy()),
+                                                  value=loss_per_concept,
                                                   batch_size=batch_size,
                                                   mode='train')
 
@@ -161,11 +150,11 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                                                       value=fid,
                                                       batch_size=len(self.train_loader.dataset),
                                                       mode='train')
-                    self.metrics_tracker.update_batch(
-                        update_dict_or_key='feature_importance',
-                        value=fi,
-                        batch_size=len(self.train_loader.dataset),
-                        mode='train')
+                    # self.metrics_tracker.update_batch(
+                    #     update_dict_or_key='feature_importance',
+                    #     value=fi,
+                    #     batch_size=len(self.train_loader.dataset),
+                    #     mode='train')
 
                 loss = self.alpha * loss_concept_total + loss_label["target_loss"]
 
@@ -180,17 +169,6 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                 t.set_postfix(
                     batch_id='{0}'.format(batch_idx + 1))
                 t.update()
-
-        # visualize last tree
-        if epoch == (self.epochs - 1):
-            self._visualize_tree(tree=tree,
-                                 config=self.config,
-                                 epoch=epoch,
-                                 APL=APL,
-                                 train_acc='None',
-                                 val_acc='None',
-                                 mode='train',
-                                 expert=None)
 
         if self.do_validation:
             self._valid_epoch(epoch)
@@ -222,14 +200,9 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
             with tqdm(total=len(self.val_loader), file=sys.stdout) as t:
                 for batch_idx, (X_batch, C_batch, y_batch) in enumerate(self.val_loader):
 
-                    C_hard = C_batch[:, self.hard_concepts]
-
                     batch_size = X_batch.size(0)
                     X_batch = X_batch.to(self.device)
                     C_batch = C_batch.to(self.device)
-                    C_batch = C_batch[:, self.arch.selected_concepts]
-
-                    C_hard = C_hard.to(self.device)
                     y_batch = y_batch.to(self.device)
 
                     # Forward pass
@@ -240,9 +213,8 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                     self.metrics_tracker.track_total_val_correct_per_epoch_per_concept(
                         preds=C_pred_soft.detach().cpu(), labels=C_batch.detach().cpu()
                     )
-                    C_pred_soft = torch.sigmoid(C_pred_soft)
-                    C_pred_concat = torch.cat((C_hard, C_pred_soft), dim=1)
-                    C_pred = C_pred_concat[:, self.sorted_concept_indices]
+                    # C_pred_soft = torch.sigmoid(C_pred_soft)
+                    C_pred = sigmoid_or_softmax_with_groups(C_pred_soft, self.concept_names)
                     tensor_C_pred = torch.cat((tensor_C_pred, C_pred), dim=0)
                     y_pred = self.model.label_predictor(C_pred)
                     tensor_y_pred = torch.cat((tensor_y_pred, y_pred), dim=0)
@@ -274,9 +246,7 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                             mode='val')
 
                     # Calculate Concept losses
-                    loss_concept_total = self.criterion_concept(C_pred, C_batch)
-                    bce_loss_per_concept = self.criterion_per_concept(C_pred, C_batch)
-                    bce_loss_per_concept = torch.mean(bce_loss_per_concept, dim=0)
+                    loss_concept_total, loss_per_concept = self.criterion_concept(C_pred, C_batch)
                     self.metrics_tracker.update_batch(
                         update_dict_or_key='concept_loss',
                         value=loss_concept_total.detach().cpu().item(),
@@ -284,7 +254,7 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                         mode='val')
                     self.metrics_tracker.update_batch(
                         update_dict_or_key='loss_per_concept',
-                        value=list(bce_loss_per_concept.detach().cpu().numpy()),
+                        value=loss_per_concept,
                         batch_size=batch_size,
                         mode='val')
 
@@ -317,11 +287,11 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                             value=fid,
                             batch_size=len(self.val_loader.dataset),
                             mode='val')
-                        self.metrics_tracker.update_batch(
-                            update_dict_or_key='feature_importance',
-                            value=fi,
-                            batch_size=len(self.val_loader.dataset),
-                            mode='val')
+                        # self.metrics_tracker.update_batch(
+                        #     update_dict_or_key='feature_importance',
+                        #     value=fi,
+                        #     batch_size=len(self.val_loader.dataset),
+                        #     mode='val')
 
                         # if (epoch == self.epochs - 1) and self.selective_net == False:
                         #     # visualize last tree
@@ -368,8 +338,8 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
         tensor_C_pred = torch.FloatTensor().to(self.device)
         tensor_y_pred = torch.FloatTensor().to(self.device)
 
-        test_metrics = {"concept_loss": 0, "loss_per_concept": np.zeros(self.num_concepts), "total_correct": 0,
-                        "accuracy_per_concept": np.zeros(self.num_concepts),
+        test_metrics = {"concept_loss": 0, "loss_per_concept": np.zeros(self.n_concept_groups), "total_correct": 0,
+                        "accuracy_per_concept": np.zeros(self.n_concept_groups),
                         "loss": 0, "target_loss": 0, "accuracy": 0, "APL": 0, "fidelity": 0,
                         "feature_importance": [], "APL_predictions": []}
 
@@ -380,8 +350,6 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                     batch_size = X_batch.size(0)
                     X_batch = X_batch.to(self.device)
                     C_batch = C_batch.to(self.device)
-                    C_batch = C_batch[:, self.arch.selected_concepts]
-
                     y_batch = y_batch.to(self.device)
 
                     # Forward pass
@@ -389,23 +357,22 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
                     C_pred = C_pred[:, self.arch.selected_concepts]
 
                     # Track number of corrects per concept
-                    correct_per_column = column_get_correct(C_pred, C_batch)
+                    correct_per_column = column_get_correct(C_pred, C_batch, self.concept_names)
                     correct_per_column = correct_per_column.detach().cpu().numpy()
                     test_metrics["accuracy_per_concept"] += np.array([x for x in correct_per_column])
 
-                    C_pred = torch.sigmoid(C_pred)
+                    # C_pred = torch.sigmoid(C_pred)
+                    C_pred = sigmoid_or_softmax_with_groups(C_pred, self.concept_names)
                     tensor_C_pred = torch.cat((tensor_C_pred, C_pred), dim=0)
                     y_pred = self.model.label_predictor(C_pred)
                     tensor_y_pred = torch.cat((tensor_y_pred, y_pred), dim=0)
                     outputs = {"prediction_out": y_pred}
 
                     # Calculate Concept losses
-                    loss_concept_total = self.criterion_concept(C_pred, C_batch)
-                    bce_loss_per_concept = self.criterion_per_concept(C_pred, C_batch)
-                    bce_loss_per_concept = torch.mean(bce_loss_per_concept, dim=0).detach().cpu().numpy()
+                    loss_concept_total, loss_per_concept = self.criterion_concept(C_pred, C_batch)
 
                     test_metrics["concept_loss"] += loss_concept_total.detach().cpu().item() * batch_size
-                    test_metrics["loss_per_concept"] += np.array([x * batch_size for x in bce_loss_per_concept])
+                    test_metrics["loss_per_concept"] += np.array([x * batch_size for x in loss_per_concept])
 
                     # Calculate Label losses
                     test_metrics["total_correct"] += get_correct(y_pred, y_batch, self.config["dataset"]["num_classes"])
@@ -569,15 +536,6 @@ class XCY_Epoch_Trainer(EpochTrainerBase):
         APL, fid, fi, tree = self._calculate_APL(self.min_samples_leaf,
                                                  tensor_C_pred_acc,
                                                  tensor_y_pred_acc)
-
-        self._visualize_tree(tree=tree,
-                             config=self.config,
-                             epoch=None,
-                             APL=APL,
-                             train_acc='None',
-                             val_acc='None',
-                             mode=f'selected_{mode}_samples',
-                             expert=expert)
 
         print(f"APL: {APL}")
         print(f"Fidelity: {fid}")
